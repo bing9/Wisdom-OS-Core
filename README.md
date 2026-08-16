@@ -10,6 +10,14 @@ The core formula:
 Intent → Context → Decision → Task → Evidence → Outcome → Case law
 ```
 
+## Three principles
+
+1. **Work continuity over agent identity** — shared context must let a blank agent resume within five minutes.
+2. **Human intent, AI execution** — humans own outcomes and irreversible calls; AI owns coordination, delegation, and handoffs.
+3. **Decision compounding over task throughput** — feedback, evidence, and outcomes must improve future judgment, not merely close tasks.
+
+Read the full [Principles](docs/PRINCIPLES.md) and the operational [Core Contract](docs/CORE_CONTRACT.md).
+
 The project deliberately starts with the smallest compounding layer. The board UI is an instrument panel, not the product. The product is a restartable decision record that survives Claude Code, Codex, Hermes, or the next agent runtime.
 
 ## Why this exists
