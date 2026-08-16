@@ -103,6 +103,8 @@ Wisdom OS Core is an independent implementation focused on decision compounding 
 
 `v0.1` is a concierge MVP: the kernel, gates, UI, API, CLI, persistence, and tests work. The next validation is one real multi-agent workstream—not more UI.
 
+Success does not require scale. One deep user whose real decisions repeatedly improve is enough; stars, user count, and organizational growth are optional.
+
 ## License
 
 MIT

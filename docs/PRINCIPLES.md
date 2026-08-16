@@ -28,6 +28,8 @@ Intent → Context → Decision → Task → Evidence → Outcome → Case law
 
 **Compounding test:** every consequential outcome must make a future decision cheaper, faster, or better.
 
+**Depth test:** one deep user whose real decisions repeatedly improve is sufficient validation. User count, GitHub stars, and organizational scale are optional—not the product objective.
+
 ## Product consequences
 
 - The work folder is the source of truth; agent topology is disposable runtime state.
