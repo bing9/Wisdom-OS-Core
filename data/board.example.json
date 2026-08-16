@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "revision": 0,
+  "areas": [
+    {
+      "id": "area-product",
+      "name": "Product",
+      "director": "DIR-product",
+      "mandate": "Turn a clearly stated intent into one validated user outcome.",
+      "deliveryContract": "One working artifact, independent evidence, and a restartable handoff."
+    },
+    {
+      "id": "area-operations",
+      "name": "Operations",
+      "director": "DIR-operations",
+      "mandate": "Keep recurring delivery calm, observable, and recoverable.",
+      "deliveryContract": "Failures are loud; routine coordination is handled without creating a human inbox."
+    }
+  ],
+  "decisions": [
+    {
+      "id": "decision-first-pilot",
+      "title": "Choose the first live workflow",
+      "areaId": "area-product",
+      "stage": "judge",
+      "priority": "P0",
+      "whyNow": "The kernel only earns value when feedback from a real workflow compounds into the next decision.",
+      "options": [
+        { "choice": "Pilot one current project", "sacrifice": "Narrow initial coverage" },
+        { "choice": "Model every work area first", "sacrifice": "Delay real evidence" }
+      ],
+      "humanCall": "",
+      "owner": "",
+      "dueDate": "",
+      "resolvedPremise": "",
+      "reviewDate": "",
+      "outcome": "",
+      "review": "",
+      "caseLawUpdate": ""
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-first-pilot",
+      "title": "Run one maker → verifier → human handoff",
+      "areaId": "area-product",
+      "decisionId": "decision-first-pilot",
+      "stage": "ready",
+      "priority": "P0",
+      "acceptance": "A blank second agent resumes from the generated handoff and produces independently verified evidence.",
+      "maker": "",
+      "evidence": "",
+      "verifier": "",
+      "verification": "",
+      "acceptedByHuman": false,
+      "blockedReason": "",
+      "owner": "",
+      "dueDate": ""
+    }
+  ],
+  "feedback": [],
+  "runs": [],
+  "history": [
+    {
+      "id": "h-seed",
+      "entityType": "decision",
+      "entityId": "decision-first-pilot",
+      "action": "created",
+      "at": "2026-08-16T00:00:00.000Z"
+    }
+  ]
+}

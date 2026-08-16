@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Decision Flywheel Cockpit</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="corgi-mark" aria-hidden="true">C</div>
+        <div>
+          <div class="eyebrow">CALM SYSTEM · LOCAL FIRST</div>
+          <h1>Decision Flywheel</h1>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="saveStatus" class="save-status"><i></i> Connecting</span>
+        <button id="exportBtn" class="button ghost">Export</button>
+        <button id="importBtn" class="button ghost">Import</button>
+        <input id="importInput" type="file" accept="application/json" hidden />
+        <button id="addItemBtn" class="button primary">+ New decision</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <section class="butler-panel">
+          <div class="section-kicker">BUTLER BRIEF</div>
+          <div class="butler-title-row">
+            <h2>只交回判断</h2>
+            <span class="live-pill"><i></i> LIVE</span>
+          </div>
+          <p class="muted">全局扫描 decision、handoff 与验证缺口。最多三件。</p>
+          <div id="butlerBrief" class="brief-list"></div>
+          <button id="runButlerBtn" class="text-button">↻ Run scan</button>
+        </section>
+
+        <section class="areas-panel">
+          <div class="section-heading">
+            <div>
+              <div class="section-kicker">DIRECTOR AREAS</div>
+              <h2>交付区域</h2>
+            </div>
+            <button id="addAreaBtn" class="icon-button" title="Add area">+</button>
+          </div>
+          <div id="areaList" class="area-list"></div>
+        </section>
+
+        <section class="system-note">
+          <div class="system-note-icon">↳</div>
+          <div>
+            <strong>Folder owns memory.</strong>
+            <p>Agent 只执行。Director 只调度与验收。</p>
+          </div>
+        </section>
+      </aside>
+
+      <main class="main-stage">
+        <section id="areaHeader" class="area-header"></section>
+        <div class="board-toolbar">
+          <div class="segmented" role="tablist" aria-label="Board mode">
+            <button class="mode-button active" data-mode="decision">Decision flywheel</button>
+            <button class="mode-button" data-mode="task">Delivery pipeline</button>
+          </div>
+          <div class="toolbar-right">
+            <label class="search-field"><span>⌕</span><input id="searchInput" type="search" placeholder="Filter cards" /></label>
+            <select id="priorityFilter" class="compact-select" aria-label="Priority filter">
+              <option value="all">All priority</option>
+              <option value="P0">P0</option>
+              <option value="P1">P1</option>
+              <option value="P2">P2</option>
+            </select>
+          </div>
+        </div>
+        <section id="board" class="board" aria-label="Decision and delivery board"></section>
+      </main>
+    </div>
+  </div>
+
+  <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+  <aside id="drawer" class="drawer" aria-label="Card details" aria-hidden="true"></aside>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/src/app.mjs"></script>
+</body>
+</html>
