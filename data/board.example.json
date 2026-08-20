@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "revision": 0,
   "areas": [
     {
@@ -42,12 +42,12 @@
   "tasks": [
     {
       "id": "task-first-pilot",
-      "title": "Run one maker → verifier → human handoff",
+      "title": "Run one Pi maker → verifier → human handoff",
       "areaId": "area-product",
       "decisionId": "decision-first-pilot",
       "stage": "ready",
       "priority": "P0",
-      "acceptance": "A blank second agent resumes from the generated handoff and produces independently verified evidence.",
+      "acceptance": "A blank second Pi session resumes from injected state and the generated handoff, then produces independently verified evidence without opening a web app.",
       "maker": "",
       "evidence": "",
       "verifier": "",
@@ -60,6 +60,12 @@
   ],
   "feedback": [],
   "runs": [],
+  "cases": [],
+  "precedentUses": [],
+  "receipts": [],
+  "events": [],
+  "processSignals": [],
+  "improvements": [],
   "history": [
     {
       "id": "h-seed",

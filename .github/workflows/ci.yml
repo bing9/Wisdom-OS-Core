@@ -12,5 +12,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: cp data/board.example.json data/board.json
       - run: npm run check
+      - run: npm pack --dry-run --ignore-scripts

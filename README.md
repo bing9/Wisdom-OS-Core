@@ -1,99 +1,116 @@
 # Wisdom OS Core
 
-**Humans define intent; AI manages execution; outcomes compound into better decisions.**
+**Humans define intent; Pi carries execution context; outcomes revise the next decision.**
 
-Wisdom OS Core is a portable, local-first kernel for multi-agent work. It keeps durable context, decisions, requirements, feedback, evidence, and handoffs outside any one agent session. A Butler surfaces at most three human judgments; Directors own delivery areas; replaceable agents do the work.
-
-The core formula:
-
-```text
-Intent → Context → Decision → Task → Evidence → Outcome → Case law
-```
-
-The project deliberately starts with the smallest compounding layer. The board UI is an instrument panel, not the product. The product is a restartable decision record that survives Claude Code, Codex, Hermes, or the next agent runtime.
-
-## Why this exists
-
-Agent throughput is rising faster than work continuity. Chat history, agent identity, and orchestration topology are weak sources of truth. The durable asset is the work folder:
+Wisdom OS Core is a Pi-native, local-first package for durable multi-agent work. The primary
+interface is the **Pi TUI**, not a web application. It automatically captures decision-shaped work,
+documents requirement changes and evidence outside the chat, and turns repeated correction classes
+into governed harness-improvement work.
 
 ```text
-Context = memory and truth
-Backlog = priority
-Director = delivery contract
-Agent = replaceable worker
-Verifier = release gate
+Intent → Decision → Task → Evidence → Outcome → Case law → next decision
 ```
 
-If a new agent cannot resume from the shared state in five minutes, the system does not own the work yet.
-
-## What is implemented
-
-- Drag-and-drop Decision Flywheel: `SENSE → DISTILL → JUDGE → BANK → LEARN`
-- Drag-and-drop Delivery Pipeline: `BACKLOG → READY → DOING → VERIFY → DONE`
-- Per-area Director mandate and delivery contract
-- Butler scan that returns at most three P0 findings
-- Transition gates: no banked decision without a human call; no completed task without independent verification and human acceptance
-- Feedback and requirement-delta ledger
-- Agent command/run/evidence ledger
-- Restartable handoff generator
-- Shared HTTP API and agent CLI
-- JSON export/import and local-first persistence
-- Optimistic revision guard for concurrent agents
-- Zero runtime dependencies
-
-## Quick start
+## Install
 
 ```bash
-cp data/board.example.json data/board.json
-npm test
-npm start
+pi install git:github.com/bing9/Wisdom-OS-Core@v0.2.0
+pi
 ```
 
-Open `http://127.0.0.1:4178`.
-
-Agent access:
+For a checkout:
 
 ```bash
+pi -e .
+```
+
+The extension starts automatically. No server is required.
+
+- `/wos` — compact TUI: top three findings plus active work
+- `/wos path` — show the active state file
+- `/wos shared` — move this project from private-local state to `<project>/.wisdom-os/state.json`
+- `/wos handoff decision <id>` — place a restartable handoff in the editor
+- `/wos decide <id>` — explicit human BANK gate
+- `/wos verify <id>` — independent verification plus human DONE gate
+- `/wos learn <id>` — outcome review and case-law disposition
+- `/wos precedent <case-id> <decision-id>` — record whether precedent changed the later call
+- `/wos improve <improvement-id>` — approve a semantic canary or disable the proposal
+- `wisdom_os` — model tool for decisions, tasks, feedback, evidence, handoffs, and precedents
+
+Default state is private and project-keyed under `~/.wisdom-os/projects/`. Set
+`WISDOM_OS_STATE=/absolute/path/state.json` for an explicit location or
+`WISDOM_OS_READ_ONLY=1` for a zero-write session.
+
+## What works out of the box
+
+| Pi lifecycle | Wisdom OS behavior |
+|---|---|
+| Session starts | Opens the project state and shows a quiet status indicator |
+| Human types | Preserves the input in a bounded private event journal |
+| Agent starts | Injects active work and matching precedents |
+| Agent writes or a tool fails | Records artifact/run evidence |
+| Agent settles | Writes a completion receipt with answer excerpt and touched artifacts |
+| Human/verification correction | Records a process signal; recurrence automatically opens an improvement |
+| `/wos` | Shows at most three judgment items and current work |
+
+The adapter records raw observations automatically, and the Pi agent uses `wisdom_os` to document
+material decisions, requirement changes, tasks, and corrections during the turn. BANK, DONE,
+semantic harness changes, and case-law changes remain explicit human gates.
+
+## How it compounds
+
+A session journal provides continuity; it is not learning. Compounding occurs only when:
+
+1. work records an expected outcome;
+2. evidence and an independent verifier arrive;
+3. a human accepts the consequential result;
+4. the outcome strengthens, amends, or refutes a case;
+5. that case returns before a later decision and is recorded as changing, challenging, or confirming it.
+
+Refuted cases remain retrievable as negative precedent.
+
+The harness uses the same discipline on itself:
+
+```text
+correction → recurring class → improvement proposal/task → regression test → canary
+→ independent verification → live control with rollback/auto-disable → recurrence measured again
+```
+
+Mechanical, reversible improvements can enter the work queue automatically. Semantic policy changes
+require human approval. See `docs/CORE_CONTRACT.md` and `docs/PI_PACKAGE_DESIGN.md`.
+
+## Direct CLI
+
+The CLI uses the same local state directly; it does not require HTTP:
+
+```bash
+node cli.mjs init
 node cli.mjs butler
-node cli.mjs list decision
-node cli.mjs handoff decision decision-first-pilot
-node cli.mjs move task task-first-pilot doing
-node cli.mjs feedback decision decision-first-pilot "Reviewer" "The wedge is too broad" "Narrow to one live workflow"
-node cli.mjs run task task-first-pilot "Claude Code" "npm test" "pass" "test output"
+node cli.mjs list task
+node cli.mjs handoff decision <id>
+node cli.mjs precedents "query"
 ```
 
-Set `DECISION_COCKPIT_URL` when the server is not at the default URL.
+## Repository map
 
-## Core boundary
-
-Wisdom OS Core does not try to become another complex agent orchestrator. It stores intent and context in a portable contract; AI runtimes can compile that contract into whatever director/subagent topology fits the moment.
-
-Default flow:
-
-1. Human states desired outcome, boundary, and stakes.
-2. Butler identifies the smallest decision that unblocks work.
-3. Area Director assembles context and delegates execution.
-4. Maker produces an artifact; an independent verifier supplies evidence.
-5. Human banks consequential calls and accepts final delivery.
-6. Outcome updates case law, making the next decision cheaper and better.
-
-See `docs/CORE_CONTRACT.md`.
-
-## Portability
-
-State is plain JSON; the API is regular HTTP; agent commands are a zero-dependency Node CLI. Project artifacts can remain in Google Drive, Git, Obsidian, or another folder system. Wisdom OS Core stores links and decision context rather than taking ownership of every artifact.
-
-## Influences
-
-- [Canvasight](https://github.com/Niall-Young/Canvasight): canvas-native task and asset context
-- [Dashi Taskboard](https://github.com/chuspeeism/dashi-taskboard): shared API/CLI, optimistic versions, and explicit human acceptance
-- [Vibe Kanban](https://github.com/BloopAI/vibe-kanban): multi-agent worktree orchestration
-
-Wisdom OS Core is an independent implementation focused on decision compounding rather than coding-agent throughput.
+```text
+extensions/wos-guards.ts   portable result-time safety gates, same production name
+extensions/wos-butler.ts   lifecycle capture, context, receipts, typed tool, same production name
+extensions/wos-lane.ts     Pi judgment overlays, same production name
+skills/wisdom-os-core/     on-demand operating contract
+skills/port-private-extension/ repeatable private→public extraction method
+prompts/wos-review.md      outcome-to-case review prompt
+src/domain.mjs             transition gates, improvement loop, handoff, precedent retrieval
+src/store.mjs              private/shared local state, lock, atomic write, read-back
+cli.mjs                    direct state CLI
+archive/web-v0.1/          retained browser prototype; not shipped as the product interface
+```
 
 ## Status
 
-`v0.1` is a concierge MVP: the kernel, gates, UI, API, CLI, persistence, and tests work. The next validation is one real multi-agent workstream—not more UI.
+`v0.2` is the Pi-first architecture and adapter. Publication is gated on Node 20/22 CI plus a clean
+install test with `pi -e .`. The old browser cockpit is preserved under `archive/web-v0.1/` for
+history; it is not loaded by the package.
 
 ## License
 

@@ -80,8 +80,45 @@ A decision cannot enter `LEARN` without an outcome, review, and case-law update.
 
 Feedback is not a chat reply. It must be attached to the decision or task and state whether the requirement changed. Outcomes strengthen, revise, or demote prior case law.
 
-## 8. UI and orchestration are replaceable
+## 8. Pi is the primary interaction surface
 
-The durable kernel is the contract plus event ledger. Kanban, canvas, terminal, Claude Code, Codex, and Hermes are adapters.
+The product interface is the **Pi TUI**, loaded as a Pi package. The TUI exposes decisions,
+verification, handoffs, and due outcome reviews where the work already happens; it does not require a
+separate web application or a second inbox.
+
+The durable kernel remains the contract plus event ledger. Pi is the primary adapter; other agents
+and orchestrators may use the direct CLI or JSON state. Every UI is a view and may be replaced without
+changing the record.
+
+The archived v0.1 browser prototype is historical reference only. It is not shipped or started by
+default.
 
 Backlog/context is source code; orchestration is compiled runtime.
+
+## 9. Capture is automatic; semantic promotion is governed
+
+The Pi adapter automatically preserves human turns, touched artifacts, failed tools, and completion
+receipts. During the turn, the agent documents material decisions, tasks, requirement deltas,
+corrections, and evidence through the typed kernel tool. A missed semantic capture remains visible in
+the raw event journal; it is not lost with the transcript.
+
+Automatic capture does not equal automatic approval. BANK, DONE, case-law changes, and semantic
+harness policy retain their human gates.
+
+## 10. Accumulation is not compounding
+
+A session journal, artifact list, or growing board provides continuity but does not prove learning.
+The loop compounds only when an outcome strengthens, amends, or refutes a case and that precedent
+later changes, challenges, or confirms another decision. Refuted cases remain retrievable.
+
+## 11. The harness learns from its own failures
+
+Every human correction or verifier rejection is a typed process signal. A recurring class
+automatically becomes an improvement proposal with its evidence, expected effect, and falsifier.
+
+- Mechanical and reversible controls may enter the work queue automatically.
+- Semantic policy changes require explicit human approval.
+- Every control requires a regression test, rollback, quality auto-disable, canary result, and an
+  independent verifier before going live.
+- Recurrence after launch is a falsifier: the improvement can be amended or disabled rather than
+  accumulating as permanent policy.

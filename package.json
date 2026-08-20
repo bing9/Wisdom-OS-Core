@@ -1,15 +1,28 @@
 {
   "name": "wisdom-os-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
-  "description": "Portable intent, decision, context and feedback kernel for AI-managed work.",
+  "description": "Pi-native, local-first decision and learning kernel for durable multi-agent work.",
   "scripts": {
-    "start": "node server.mjs",
+    "start": "pi -e .",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server.mjs && node --check cli.mjs && node --check src/domain.mjs && node --check src/app.mjs && npm test"
+    "audit:portable": "node scripts/portability-audit.mjs",
+    "check": "node --check cli.mjs && node --check src/domain.mjs && node --check src/store.mjs && node scripts/portability-audit.mjs && npm test"
+  },
+  "files": ["extensions", "skills", "prompts", "src", "scripts/portability-audit.mjs", "cli.mjs", "data/board.example.json", "docs"],
+  "pi": {
+    "extensions": ["./extensions/wos-guards.ts", "./extensions/wos-butler.ts", "./extensions/wos-lane.ts"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "engines": { "node": ">=20" },
   "license": "MIT",
-  "keywords": ["decision-os", "ai-agents", "kanban", "context-engineering", "claude-code", "codex"]
+  "keywords": ["pi-package", "decision-os", "ai-agents", "context-engineering", "tui"]
 }

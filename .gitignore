@@ -1,4 +1,6 @@
 data/board.json
+.wisdom-os/state.json
+.wisdom-os/*.lock
 .DS_Store
 node_modules/
 *.log

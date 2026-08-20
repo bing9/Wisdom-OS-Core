@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHandoff, computeButlerBrief, moveItem, validateDecisionTransition, validateTaskTransition } from '../src/domain.mjs';
+import { activeContext, buildHandoff, computeButlerBrief, moveItem, recordProcessSignal, retrievePrecedents, validateDecisionTransition, validateImprovementTransition, validateTaskTransition } from '../src/domain.mjs';
 
 test('bank transition names the missing human call, owner, date, and resolved premise', () => {
   const decision = { humanCall: '', owner: '', dueDate: '', resolvedPremise: '' };
@@ -21,7 +21,7 @@ test('learn transition requires an outcome, review, and explicit case-law change
 });
 
 test('done transition requires independent verification, evidence, and human acceptance', () => {
-  const task = { acceptance: 'Browser flow works', evidence: '', maker: 'Claude', verifier: 'Claude', verification: '', acceptedByHuman: false };
+  const task = { acceptance: 'Pi TUI flow works', evidence: '', maker: 'Pi-maker', verifier: 'Pi-maker', verification: '', acceptedByHuman: false };
 
   const result = validateTaskTransition(task, 'done');
 
@@ -95,7 +95,7 @@ test('handoff packages decision, director, open work, feedback, and agent-run ev
   const state = {
     areas: [{ id: 'a1', name: 'Product', director: 'DIR-product', mandate: 'Close the product loop' }],
     decisions: [{ id: 'd1', title: 'Pick wedge', areaId: 'a1', stage: 'bank', humanCall: 'Context-first', owner: 'Human', dueDate: '2026-08-20', resolvedPremise: 'Continuity compounds' }],
-    tasks: [{ id: 't1', title: 'Build browser MVP', decisionId: 'd1', stage: 'doing', acceptance: 'Drag persists' }],
+    tasks: [{ id: 't1', title: 'Build Pi TUI MVP', decisionId: 'd1', stage: 'doing', acceptance: 'State restores in a fresh Pi session' }],
     feedback: [{ id: 'f1', entityType: 'decision', entityId: 'd1', source: 'Human', note: 'Add a Butler', requirementDelta: 'Global scan required', createdAt: '2026-08-16T10:00:00.000Z' }],
     runs: [{ id: 'r1', entityType: 'decision', entityId: 'd1', agent: 'Claude Code', command: 'npm test', result: 'pass', artifact: 'test.log', createdAt: '2026-08-16T11:00:00.000Z' }],
   };
@@ -104,7 +104,44 @@ test('handoff packages decision, director, open work, feedback, and agent-run ev
 
   assert.match(handoff, /Pick wedge/);
   assert.match(handoff, /DIR-product/);
-  assert.match(handoff, /Build browser MVP/);
+  assert.match(handoff, /Build Pi TUI MVP/);
   assert.match(handoff, /Global scan required/);
   assert.match(handoff, /Claude Code · npm test · pass · test.log/);
+});
+
+test('a recurring correction opens governed harness work without silently approving semantics', () => {
+  const base = { tasks: [], processSignals: [], improvements: [] };
+  const once = recordProcessSignal(base, { id: 's1', klass: 'missing-source', semantic: true });
+  assert.equal(once.improvements.length, 0);
+  const twice = recordProcessSignal(once, { id: 's2', klass: 'missing-source', semantic: true });
+  assert.equal(twice.improvements.length, 1);
+  assert.equal(twice.improvements[0].needsHumanApproval, true);
+  assert.equal(twice.tasks.length, 0);
+  assert.deepEqual(validateImprovementTransition(twice.improvements[0], 'canary').missing,
+    ['regression test', 'rollback', 'quality auto-disable', 'human approval when semantic']);
+
+  const mechanical1 = recordProcessSignal(twice, { id: 'm1', klass: 'duplicate-write', semantic: false });
+  const mechanical2 = recordProcessSignal(mechanical1, { id: 'm2', klass: 'duplicate-write', semantic: false });
+  assert.equal(mechanical2.improvements.at(-1).needsHumanApproval, false);
+  assert.equal(mechanical2.tasks.at(-1).improvementId, 'improvement-duplicate-write');
+});
+
+test('precedent retrieval keeps refuted cases visible and active context stays bounded', () => {
+  const state = {
+    decisions: [
+      { id: 'd0', title: 'P0 call', stage: 'judge', priority: 'P0' },
+      { id: 'd1', title: 'P1 call', stage: 'sense', priority: 'P1' },
+      { id: 'd2', title: 'Learned call', stage: 'learn', priority: 'P0' },
+    ],
+    tasks: Array.from({ length: 7 }, (_, i) => ({ id: `t${i}`, title: `Task ${i}`, stage: i === 6 ? 'done' : 'ready', priority: i ? 'P1' : 'P0' })),
+    cases: [
+      { id: 'c-active', claim: 'Video supply is thin on clips', status: 'active', scope: { surface: 'clips' }, falsifier: 'supply parity' },
+      { id: 'c-refuted', claim: 'Video supply is always thin', status: 'refuted', scope: { surface: 'clips' }, observedOutcome: 'feed was thick', falsifier: 'none' },
+    ],
+  };
+
+  const hits = retrievePrecedents(state, 'clips video supply', 5);
+  assert.deepEqual(hits.map((hit) => hit.id), ['c-refuted', 'c-active']);
+  assert.equal(activeContext(state).decisions.length, 2);
+  assert.equal(activeContext(state).tasks.length, 5);
 });

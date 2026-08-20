@@ -107,9 +107,23 @@ export function computeButlerBrief(state, now = new Date().toISOString()) {
     }
   }
 
+  for (const caseItem of state.cases ?? []) {
+    if (caseItem.status !== 'refuted' && present(caseItem.reviewDate) && caseItem.reviewDate <= today && !present(caseItem.observedOutcome)) {
+      findings.push({ type: 'case-review-due', entityType: 'case', entityId: caseItem.id, title: caseItem.claim, score: 3, priority: 'P1', message: 'A precedent is due for an outcome that may strengthen, amend, or refute it.' });
+    }
+  }
+
+  for (const improvement of state.improvements ?? []) {
+    if (improvement.stage === 'proposed' && improvement.needsHumanApproval === true) {
+      findings.push({ type: 'improvement-needs-call', entityType: 'improvement', entityId: improvement.id,
+        title: improvement.title, score: 4, priority: improvement.priority ?? 'P1',
+        message: 'A recurring failure produced a harness improvement proposal that needs a human semantic call.' });
+    }
+  }
+
   for (const area of state.areas ?? []) {
     if (!present(area.director)) {
-      findings.push({ type: 'area-without-director', entityType: 'area', entityId: area.id, title: area.name, score: 4, priority: 'P1', message: 'Area has no accountable Director.' });
+      findings.push({ type: 'area-without-director', entityType: 'area', entityId: area.id, title: area.name, score: 5, priority: 'P1', message: 'Area has no accountable Director.' });
     }
   }
 
@@ -152,4 +166,78 @@ export function buildHandoff(state, entityType, entityId) {
     ...(runs.length ? runs.map((entry) => `- ${entry.agent ?? 'Unknown'} · ${entry.command ?? ''} · ${entry.result ?? ''} · ${entry.artifact ?? ''}`) : ['- None']),
   ];
   return lines.join('\n');
+}
+
+const words = (value) => new Set(String(value ?? '').toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+
+export function retrievePrecedents(state, query, limit = 3) {
+  const queryWords = words(query);
+  return (state.cases ?? [])
+    .map((caseItem) => {
+      const haystack = words([caseItem.claim, caseItem.falsifier, caseItem.observedOutcome,
+        JSON.stringify(caseItem.scope ?? {})].join(' '));
+      const overlap = [...queryWords].filter((word) => haystack.has(word)).length;
+      const statusWeight = caseItem.status === 'refuted' ? 0.25 : caseItem.status === 'amended' ? 0.15 : 0;
+      return { ...caseItem, score: overlap + statusWeight };
+    })
+    .filter((caseItem) => caseItem.score > 0)
+    .sort((a, b) => b.score - a.score || String(b.reviewDate ?? '').localeCompare(String(a.reviewDate ?? '')))
+    .slice(0, limit);
+}
+
+export function recordProcessSignal(state, signal, threshold = 2, now = new Date().toISOString()) {
+  const next = { ...state, processSignals: [...(state.processSignals ?? []), signal] };
+  const same = next.processSignals.filter((item) => item.klass === signal.klass);
+  const existing = (next.improvements ?? []).find((item) => item.klass === signal.klass && item.stage !== 'disabled');
+  if (same.length >= threshold && !existing) {
+    const id = `improvement-${String(signal.klass).replace(/[^a-z0-9-]+/gi, '-').toLowerCase()}`;
+    const improvement = {
+      id, klass: signal.klass, title: `Prevent recurring failure: ${signal.klass}`,
+      stage: 'proposed', priority: 'P1', evidenceIds: same.map((item) => item.id),
+      expectedEffect: `Reduce recurrence of ${signal.klass}`,
+      falsifier: `${signal.klass} recurs after the control is live`,
+      regressionTest: '', rollback: '', autoDisable: '', maker: '', verifier: '',
+      canaryResult: '', needsHumanApproval: signal.semantic !== false,
+      createdAt: now, updatedAt: now,
+    };
+    next.improvements = [...(next.improvements ?? []), improvement];
+    if (!improvement.needsHumanApproval) {
+      next.tasks = [...(next.tasks ?? []), {
+        id: `task-${id}`, title: improvement.title, areaId: '', decisionId: '', improvementId: id,
+        stage: 'ready', priority: 'P1',
+        acceptance: `Regression test, rollback, quality auto-disable, independent verifier, and measured reduction in ${signal.klass} without a new human inbox.`,
+        maker: '', evidence: '', verifier: '', verification: '', acceptedByHuman: false,
+        blockedReason: '', owner: '', dueDate: '', createdAt: now, updatedAt: now,
+      }];
+    }
+  }
+  return next;
+}
+
+export function validateImprovementTransition(improvement, targetStage) {
+  const requirements = {
+    canary: [
+      ['evidence', Array.isArray(improvement.evidenceIds) && improvement.evidenceIds.length >= 2],
+      ['expected effect', improvement.expectedEffect], ['falsifier', improvement.falsifier],
+      ['regression test', improvement.regressionTest], ['rollback', improvement.rollback],
+      ['quality auto-disable', improvement.autoDisable],
+      ['human approval when semantic', improvement.needsHumanApproval !== true || improvement.approvedByHuman === true],
+    ],
+    live: [
+      ['canary result', improvement.canaryResult],
+      ['independent verifier', present(improvement.verifier) && improvement.verifier.trim() !== improvement.maker?.trim()],
+      ['quality auto-disable', improvement.autoDisable],
+    ],
+  }[targetStage] ?? [];
+  const missing = requirements.filter(([, value]) => !validRequirement(value)).map(([label]) => label);
+  return { ok: missing.length === 0, missing };
+}
+
+export function activeContext(state) {
+  const decisions = (state.decisions ?? []).filter((item) => !['learn'].includes(item.stage));
+  const tasks = (state.tasks ?? []).filter((item) => item.stage !== 'done');
+  const rank = (item) => priorityRank[item.priority] ?? 9;
+  decisions.sort((a, b) => rank(a) - rank(b));
+  tasks.sort((a, b) => rank(a) - rank(b));
+  return { decisions: decisions.slice(0, 3), tasks: tasks.slice(0, 5) };
 }
