@@ -102,15 +102,42 @@ skills/port-private-extension/ repeatable private→public extraction method
 prompts/wos-review.md      outcome-to-case review prompt
 src/domain.mjs             transition gates, improvement loop, handoff, precedent retrieval
 src/store.mjs              private/shared local state, lock, atomic write, read-back
+src/safety.mjs             terminal-message predicate, append-don't-replace, kill switch, fail-open
+src/gatelog.mjs            gate manifest, gate telemetry, real-vs-synthetic coverage
+src/guard-predicates.mjs   the shipped result-time predicates, importable by tests
+src/return-envelope.mjs    delegation return transaction: completeness, exactly-once, idle ≠ done
+scripts/release-check.mjs  the release gate, positive and negative
 cli.mjs                    direct state CLI
 archive/web-v0.1/          retained browser prototype; not shipped as the product interface
 ```
 
+## Release gate
+
+One command is the gate, and it has two jaws:
+
+```bash
+node scripts/release-check.mjs             # 12 checks — must exit 0
+node scripts/release-check.mjs --negative  # mutation test — must exit 3
+```
+
+`--negative` copies the tree, breaks one load-bearing condition at a time, and requires the normal
+gate to reject each one *by the check that owns it*. Exit 3 means every mutation was killed; exit 0
+would be indistinguishable from having tested nothing. A gate that cannot fail is not a gate.
+
+Every run prints its own `process.execPath` and `process.version` first. This is not decoration:
+Node 16 counts test **files** where Node 24 counts **subtests**, so the same green suite reports
+`8 pass` under one runtime and `40 pass` under another. A pass count without its runtime is not
+reproducible.
+
 ## Status
 
-`v0.2` is the Pi-first architecture and adapter. Publication is gated on Node 20/22 CI plus a clean
-install test with `pi -e .`. The old browser cockpit is preserved under `archive/web-v0.1/` for
-history; it is not loaded by the package.
+`v0.2` is the Pi-first architecture and adapter. CI runs the same release gate on Node 20 and 22.
+Locally the gate has been run under Node v16.20.2 and v24.10.0 — Node 20 and 22 are declared in CI
+and have **not** been exercised on the maintainer's host. The old browser cockpit is preserved under
+`archive/web-v0.1/` for history; it is not loaded by the package.
+
+The most recent private→public reconciliation is recorded in `docs/HARNESS_SYNC_2026-08-22.md`,
+including what was deliberately left private.
 
 ## License
 

@@ -1,0 +1,562 @@
+#!/usr/bin/env node
+/**
+ * The release gate. One command.
+ *
+ *   node scripts/release-check.mjs             positive gate — every check must pass, exit 0
+ *   node scripts/release-check.mjs --negative  mutation test — every mutation must be caught
+ *   node scripts/release-check.mjs --child     internal: one positive run inside a mutated copy
+ *
+ * Exit codes
+ *   0  positive gate passed
+ *   1  positive gate failed, or a mutation SURVIVED (the gate is not a gate)
+ *   3  negative gate succeeded: every mutation was killed. Non-zero by design — `--negative`
+ *      asserts that the tree is rejectable, so a zero here would be indistinguishable from
+ *      "nothing was tested".
+ *
+ * THE RUNTIME IS PART OF THE RESULT. Two Node majors on one host report different pass counts for
+ * the same suite (v16 counts files, v24 counts subtests). A bare "15 pass" is not reproducible, so
+ * every run prints its own execPath and version before anything else.
+ */
+import { spawn } from 'node:child_process';
+import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const argv = process.argv.slice(2);
+const NEGATIVE = argv.includes('--negative');
+const CHILD = argv.includes('--child');
+
+const read = (rel) => readFile(join(ROOT, rel), 'utf8');
+const exists = async (rel) => { try { await stat(join(ROOT, rel)); return true; } catch { return false; } };
+
+function run(command, args, options = {}) {
+  return new Promise((done) => {
+    const child = spawn(command, args, { cwd: ROOT, ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (error) => done({ code: 127, stdout, stderr: String(error?.message ?? error) }));
+    child.on('close', (code) => done({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+const ok = (detail) => ({ ok: true, detail });
+const bad = (detail) => ({ ok: false, detail });
+function assert(condition, message) { if (!condition) throw new Error(message); }
+
+// ── the twelve checks ────────────────────────────────────────────────────────────────────────
+
+const CHECKS = [
+  {
+    id: 'unit-suite',
+    title: 'unit / domain / store / CLI / package behaviour',
+    async run() {
+      const files = (await readdir(join(ROOT, 'tests'))).filter((name) => name.endsWith('.test.mjs')).sort();
+      assert(files.length > 0, 'no test files found');
+      const result = await run(process.execPath, ['--test', ...files.map((name) => join('tests', name))]);
+      // v16 prefixes the TAP summary with `#`, v24 with `ℹ`, and v16 counts FILES where v24 counts
+      // subtests. Both are accepted; the number is only ever reported next to its runtime.
+      const counts = /[#ℹ] tests (\d+)[\s\S]*?[#ℹ] pass (\d+)[\s\S]*?[#ℹ] fail (\d+)/.exec(result.stdout);
+      const summary = counts ? `${counts[2]} pass / ${counts[3]} fail of ${counts[1]}` : 'no summary parsed';
+      // The unit is runtime-dependent, so it is stated with the runtime rather than as a bare number.
+      return result.code === 0
+        ? ok(`${files.length} files · ${summary} under ${process.execPath} ${process.version}`)
+        : bad(`suite failed (${summary})\n${result.stdout.slice(-1600)}`);
+    },
+  },
+  {
+    id: 'lifecycle-gates',
+    title: 'evidence is separated from lifecycle; state version is pinned',
+    async run() {
+      const { validateTaskTransition, validateDecisionTransition } = await import(join(ROOT, 'src/domain.mjs'));
+      const { normalizeState, validState } = await import(join(ROOT, 'src/store.mjs'));
+
+      // The A39 shape: everything the evidence layer can produce, and it is still not DONE.
+      const evidenced = { acceptance: 'a', maker: 'm', evidence: 'e', verifier: 'v', verification: 'r',
+        acceptedByHuman: false };
+      const done = validateTaskTransition(evidenced, 'done');
+      assert(!done.ok && done.missing.includes('human acceptance'),
+        'evidence passing must not be done — human acceptance is a separate axis');
+
+      const selfVerified = validateTaskTransition({ ...evidenced, verifier: 'm', acceptedByHuman: true }, 'done');
+      assert(!selfVerified.ok && selfVerified.missing.includes('independent verifier'),
+        'maker must not be able to verify their own work');
+
+      const banked = validateDecisionTransition({ humanCall: 'x' }, 'bank');
+      assert(!banked.ok && banked.missing.length === 3, `bank must require owner, date, resolved premise: ${banked.missing}`);
+      const learned = validateDecisionTransition({}, 'learn');
+      assert(!learned.ok && learned.missing.length === 3, 'learn must require outcome, review, case-law change');
+
+      // Versioned state: the schema version is stamped, and an unknown version is refused rather
+      // than coerced. A silently upgraded state is an unversioned state.
+      assert(normalizeState({}).version === 2, 'normalizeState must stamp the current version');
+      assert(validState({ version: 3, areas: [], decisions: [], tasks: [], feedback: [], runs: [], history: [] }) === false,
+        'an unknown state version must be refused');
+      return ok('evidence ≠ lifecycle; maker ≠ verifier; bank/learn gated; version pinned at 2');
+    },
+  },
+  {
+    id: 'return-envelope',
+    title: 'return transaction: completeness, independence, exact session, exactly-once, idle ≠ done',
+    async run() {
+      const mod = await import(join(ROOT, 'src/return-envelope.mjs'));
+      const complete = { request_id: 'r1', producing_agent: 'p', reply_to_session_id: 's1', reply_runtime: 'pi',
+        reply_to_agent: 'a', reply_policy: 'awaited-done', awaited_by: 'd', verified_by: 'v',
+        missing_report_action: 're-steer-once' };
+      // The expected field set is PINNED here, not read from the module. Iterating
+      // REQUIRED_ENVELOPE_FIELDS to test REQUIRED_ENVELOPE_FIELDS is self-satisfying: delete a field
+      // from the list and the loop simply stops testing it, so the gate weakens in silence.
+      const EXPECTED = ['request_id', 'producing_agent', 'reply_to_session_id', 'reply_runtime',
+        'reply_to_agent', 'reply_policy', 'awaited_by', 'verified_by', 'missing_report_action'];
+      const declared = [...mod.REQUIRED_ENVELOPE_FIELDS].sort();
+      assert(JSON.stringify(declared) === JSON.stringify([...EXPECTED].sort()),
+        `the required-field set changed: declared [${declared}] vs pinned [${[...EXPECTED].sort()}]`);
+      assert(mod.validateEnvelope(complete).ok, 'a complete envelope must validate');
+      for (const field of EXPECTED) {
+        const partial = { ...complete };
+        delete partial[field];
+        assert(!mod.validateEnvelope(partial).ok, `${field} must be required`);
+      }
+      assert(!mod.validateEnvelope({ ...complete, verified_by: 'p' }).ok, 'the producer must not verify itself');
+      assert(!mod.exactSession({ reply_to_session_id: 's1' }, 's2'), 'a return must not cross sessions');
+
+      const entries = [{ customType: 'wos-return', details: { request_id: 'r1' } }];
+      const plan = mod.planDelivery(
+        [{ request_id: 'r1', reply_to_session_id: 's1' }, { request_id: 'r2', reply_to_session_id: 's1' },
+          { request_id: 'r2', reply_to_session_id: 's1' }, { request_id: 'r3', reply_to_session_id: 'other' }],
+        's1', entries);
+      assert(plan.inject.length === 1 && plan.inject[0].request_id === 'r2', 'exactly-once delivery failed');
+      assert(plan.acknowledgeOnly.length === 2, 'already-delivered and in-batch duplicates must be acked, not re-sent');
+
+      const idle = mod.settleOutcome({ requestId: 'r1', reports: [], idle: true, envelope: complete });
+      assert(idle.outcome === 'returned-without-report' && idle.done === false,
+        'idle with no correlated report must never read as done');
+      assert(idle.recovery === 're-steer-once', 'the declared missing-report recovery must be surfaced');
+      assert(!mod.routable({}).ok, 'a report with no recipient must not count as routable');
+      return ok(`${mod.REQUIRED_ENVELOPE_FIELDS.length} required fields; idle → returned-without-report`);
+    },
+  },
+  {
+    id: 'improvement-governance',
+    title: 'improvement loop: recurrence, semantic approval, canary, verifier, auto-disable',
+    async run() {
+      const { recordProcessSignal, validateImprovementTransition } = await import(join(ROOT, 'src/domain.mjs'));
+      const base = { processSignals: [], improvements: [], tasks: [] };
+      const signal = (n, semantic) => ({ id: `s${n}`, klass: 'wrong-scope', semantic });
+
+      const once = recordProcessSignal(base, signal(1, true), 2, '2026-08-22T00:00:00.000Z');
+      assert(once.improvements.length === 0, 'one occurrence is not a recurring class');
+      const twice = recordProcessSignal(once, signal(2, true), 2, '2026-08-22T00:00:00.000Z');
+      assert(twice.improvements.length === 1, 'a recurring class must open governed work');
+      assert(twice.improvements[0].needsHumanApproval === true, 'a semantic class needs a human call');
+      assert((twice.tasks ?? []).length === 0, 'a semantic proposal must not auto-queue work');
+
+      const mechanical = recordProcessSignal(
+        recordProcessSignal(base, { id: 'm1', klass: 'flaky-path', semantic: false }, 2, '2026-08-22T00:00:00.000Z'),
+        { id: 'm2', klass: 'flaky-path', semantic: false }, 2, '2026-08-22T00:00:00.000Z');
+      assert(mechanical.tasks.length === 1, 'a mechanical, reversible class may enter the queue automatically');
+
+      const ready = { evidenceIds: ['a', 'b'], expectedEffect: 'x', falsifier: 'y', regressionTest: 't',
+        rollback: 'r', autoDisable: 'q', needsHumanApproval: true };
+      assert(!validateImprovementTransition(ready, 'canary').ok, 'a semantic control needs approval before canary');
+      assert(validateImprovementTransition({ ...ready, approvedByHuman: true }, 'canary').ok, 'approval must unblock canary');
+      assert(!validateImprovementTransition({ ...ready, approvedByHuman: true, autoDisable: '' }, 'canary').ok,
+        'no control ships without a quality auto-disable');
+      const live = { canaryResult: 'c', maker: 'm', verifier: 'v', autoDisable: 'q' };
+      assert(validateImprovementTransition(live, 'live').ok, 'a fully governed control may go live');
+      assert(!validateImprovementTransition({ ...live, verifier: 'm' }, 'live').ok, 'maker may not verify the control');
+      assert(!validateImprovementTransition({ ...live, autoDisable: '' }, 'live').ok, 'auto-disable is required to go live');
+      assert(!validateImprovementTransition({ ...live, canaryResult: '' }, 'live').ok, 'a canary result is required');
+      return ok('recurrence → proposal → semantic approval → canary → verified live, each gate provable');
+    },
+  },
+  {
+    id: 'guard-fixtures',
+    title: 'guard positive fixtures, false-positive controls, and gate provenance',
+    async run() {
+      const g = await import(join(ROOT, 'src/guard-predicates.mjs'));
+      assert(g.transient('rc=124 timed out', false), 'positive: transient class');
+      assert(!g.transient('Stale file handle', false), 'control: transient prose without a failure must not fire');
+      assert(!g.transient('exit=1\nsyntax error', false), 'control: a deterministic failure is not transient');
+      assert(g.noMatch('', 'grep -r foo .', 'bash'), 'positive: empty search');
+      assert(!g.noMatch('', 'python3 build.py', 'bash'), 'control: a silent non-search is not an absence claim');
+      assert(g.partialCoverage('Permission denied', 'grep -r foo /', 'bash'), 'positive: unreadable range');
+      assert(!g.partialCoverage('Permission denied', 'chmod 600 f', 'bash'), 'control: not a search');
+
+      const reachable = new Set([
+        ...g.evaluateGates({ body: 'rc=124 timed out', command: 'ls', isError: true }),
+        ...g.evaluateGates({ body: '', command: 'grep foo', toolName: 'bash' }),
+        ...g.evaluateGates({ body: 'Permission denied', command: 'grep -r foo /', toolName: 'bash' }),
+      ]);
+      assert(reachable.size === g.GATE_IDS.length && g.GATE_IDS.every((id) => reachable.has(id)),
+        'every declared gate must be reachable by a fixture, and no gate may fire undeclared');
+
+      // The extension's declared manifest must equal the predicate module's id list.
+      const source = await read('extensions/wos-guards.ts');
+      assert(/GATES\s*=\s*GATE_IDS\.map/.test(source),
+        'the extension must derive its gate manifest from the predicate ids, not restate them');
+
+      const { gateCoverage, gateEvent, gateManifest } = await import(join(ROOT, 'src/gatelog.mjs'));
+      const first = gateManifest([{ id: 'x', hook: 'tool_result', shipped: '2026-01-01' }], {}, '2026-08-22T00:00:00.000Z');
+      const again = gateManifest([{ id: 'x', hook: 'tool_result', shipped: '2026-08-22' }], first, '2026-08-22T00:00:00.000Z');
+      assert(again.gates.x.shipped === '2026-01-01', 'a redeploy must not re-date an existing gate');
+      const coverage = gateCoverage(first, [gateEvent({ gateId: 'x', synthetic: true })]);
+      assert(coverage.syntheticOnly.includes('x'),
+        'a gate proven only by its own tests must be reported as synthetic-only, never as working');
+      return ok(`${g.GATE_IDS.length} gates: positives fire, controls stay quiet, provenance is recorded`);
+    },
+  },
+  {
+    id: 'read-only-zero-bytes',
+    title: 'read-only mode writes zero bytes',
+    async run() {
+      const dir = await mkdtemp(join(tmpdir(), 'wos-ro-'));
+      try {
+        const statePath = join(dir, 'state.json');
+        const env = { ...process.env, WISDOM_OS_STATE: statePath, WISDOM_OS_READ_ONLY: '1' };
+        await run(process.execPath, ['cli.mjs', 'init'], { env });   // create it once, writably
+        const before = await readFile(statePath, 'utf8');
+        const beforeDir = (await readdir(dir)).sort();
+        for (const args of [['butler'], ['list', 'task'], ['list', 'case'], ['precedents', 'anything'], ['init']]) {
+          await run(process.execPath, ['cli.mjs', ...args], { env });
+        }
+        const after = await readFile(statePath, 'utf8');
+        const afterDir = (await readdir(dir)).sort();
+        assert(before === after, 'a read path changed the state file byte content');
+        assert(JSON.stringify(beforeDir) === JSON.stringify(afterDir),
+          `a read path created or removed files: ${beforeDir} -> ${afterDir}`);
+
+        // Static half: every write-capable lifecycle hook must consult READ_ONLY. A runtime check
+        // on the CLI cannot see the extension hooks, and those are where the writes live.
+        const butler = await read('extensions/wos-butler.ts');
+        assert(/const READ_ONLY = \/\^\(1\|true\|yes\)\$\/i\.test\(/.test(butler),
+          'READ_ONLY must be derived from the environment, not hard-coded');
+        // Read the hook's guard clause, not just its signature: the check on the line below the
+        // arrow is the whole point, so the window has to be wide enough to contain it.
+        const hooks = [...butler.matchAll(/pi\.on\("(input|tool_execution_end|agent_settled)"[\s\S]{0,300}/g)];
+        assert(hooks.length === 3, `expected 3 write-capable hooks, found ${hooks.length}`);
+        for (const [block, name] of hooks) {
+          assert(/READ_ONLY/.test(block), `hook ${name} does not consult READ_ONLY`);
+        }
+        return ok(`${beforeDir.length} file(s), bytes identical after 5 read commands; 3 hooks gated`);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  },
+  {
+    id: 'restart-resume',
+    title: 'restart restores durable state without replaying a transcript',
+    async run() {
+      const dir = await mkdtemp(join(tmpdir(), 'wos-resume-'));
+      try {
+        const statePath = join(dir, 'state.json');
+        const { writeState } = await import(join(ROOT, 'src/store.mjs'));
+        await writeState(statePath, {
+          version: 2, revision: 7,
+          areas: [{ id: 'area-1', name: 'Harness', director: 'Director' }],
+          decisions: [{ id: 'd1', title: 'Port the return envelope', areaId: 'area-1', stage: 'bank',
+            humanCall: 'port the contract only', owner: 'Owner', dueDate: '2026-09-01',
+            resolvedPremise: 'transport stays private', priority: 'P0' }],
+          tasks: [{ id: 't1', title: 'Write the gate', decisionId: 'd1', areaId: 'area-1', stage: 'verify',
+            acceptance: 'negative mode kills a mutation', evidence: 'release-check.mjs', maker: 'producer' }],
+          feedback: [], runs: [{ entityType: 'task', entityId: 't1', agent: 'pi', command: 'test',
+            result: 'completed', artifact: 'scripts/release-check.mjs', createdAt: '2026-08-22T00:00:00.000Z' }],
+          history: [], cases: [{ id: 'c1', claim: 'a gate that cannot fail is not a gate', status: 'active',
+            falsifier: 'a mutation survives' }],
+          precedentUses: [], receipts: [], events: [], processSignals: [], improvements: [],
+        });
+
+        // A FRESH process — no in-memory carry-over, no transcript, only the file.
+        const script = join(dir, 'resume.mjs');
+        await writeFile(script, [
+          `import { readState } from ${JSON.stringify(join(ROOT, 'src/store.mjs'))};`,
+          `import { buildHandoff, retrievePrecedents } from ${JSON.stringify(join(ROOT, 'src/domain.mjs'))};`,
+          `const state = await readState(${JSON.stringify(statePath)});`,
+          `process.stdout.write(JSON.stringify({ revision: state.revision,`,
+          `  handoff: buildHandoff(state, 'task', 't1'),`,
+          `  precedents: retrievePrecedents(state, 'gate cannot fail').length }));`,
+        ].join('\n'), 'utf8');
+        const child = await run(process.execPath, [script]);
+        assert(child.code === 0, `resume process failed: ${child.stderr.slice(-400)}`);
+        const resumed = JSON.parse(child.stdout);
+        assert(resumed.revision === 7, `revision must survive restart, got ${resumed.revision}`);
+        // The handoff is built for the TASK, so it carries the task's title plus everything the
+        // parent decision and area contribute — human call, owner, director, evidence, acceptance.
+        for (const needle of ['Write the gate', 'port the contract only', 'Owner', 'Harness',
+          'Director', 'release-check.mjs', 'negative mode kills a mutation']) {
+          assert(resumed.handoff.includes(needle), `restored handoff lost "${needle}"`);
+        }
+        assert(resumed.precedents === 1, 'precedent retrieval must survive restart');
+        return ok('revision, area, director, human call, open work, evidence and precedent all restored from disk alone');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  },
+  {
+    id: 'state-roots',
+    title: 'fresh-project, shared-project, and explicit state roots',
+    async run() {
+      const dir = await mkdtemp(join(tmpdir(), 'wos-roots-'));
+      try {
+        const { projectKey, resolveStatePath } = await import(join(ROOT, 'src/store.mjs'));
+        const fresh = await resolveStatePath(dir, {});
+        assert(fresh.includes(join('.wisdom-os', 'projects')) && fresh.includes(projectKey(dir)),
+          `a fresh project must default to private project-keyed state, got ${fresh}`);
+        assert(!fresh.startsWith(resolve(dir)), 'the default must live OUTSIDE the project directory');
+
+        await mkdir(join(dir, '.wisdom-os'), { recursive: true });
+        await writeFile(join(dir, '.wisdom-os', 'state.json'), '{}', 'utf8');
+        const shared = await resolveStatePath(dir, {});
+        assert(shared === join(resolve(dir), '.wisdom-os', 'state.json'),
+          'a checked-in state file must opt the project into shared mode');
+
+        const override = await resolveStatePath(dir, { WISDOM_OS_STATE: join(dir, 'explicit.json') });
+        assert(override === join(resolve(dir), 'explicit.json'), 'WISDOM_OS_STATE must win over both');
+
+        const other = await mkdtemp(join(tmpdir(), 'wos-roots2-'));
+        try {
+          assert(projectKey(dir) !== projectKey(other), 'two projects must not share one private key');
+        } finally { await rm(other, { recursive: true, force: true }); }
+        return ok('private default outside the project · shared opt-in · explicit override · keys distinct');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  },
+  {
+    id: 'manifest-and-docs',
+    title: 'package manifest closure, and no doc names a file that is not there',
+    async run() {
+      const pkg = JSON.parse(await read('package.json'));
+      const files = pkg.files ?? [];
+      for (const entry of files) assert(await exists(entry), `package.files names a missing path: ${entry}`);
+      for (const entry of pkg.pi?.extensions ?? []) {
+        assert(await exists(entry), `pi.extensions names a missing file: ${entry}`);
+        assert(files.some((root) => entry.replace(/^\.\//, '').startsWith(root.replace(/^\.\//, ''))),
+          `pi.extensions entry is outside the package manifest: ${entry}`);
+      }
+      // Every module a packaged extension imports must itself be packaged. A manifest that ships an
+      // entrypoint without its imports installs a package that cannot load.
+      const missingImports = [];
+      for (const entry of pkg.pi?.extensions ?? []) {
+        const body = await read(entry.replace(/^\.\//, ''));
+        for (const match of body.matchAll(/from\s+"(\.\.?\/[^"]+)"/g)) {
+          const target = relative(ROOT, resolve(dirname(join(ROOT, entry)), match[1]));
+          if (!await exists(target)) { missingImports.push(`${entry} → ${target} (absent)`); continue; }
+          if (!files.some((root) => target.startsWith(root.replace(/^\.\//, '')))) {
+            missingImports.push(`${entry} → ${target} (not in package.files)`);
+          }
+        }
+      }
+      assert(missingImports.length === 0, `packaged extensions import unpackaged modules:\n  ${missingImports.join('\n  ')}`);
+
+      // Repo-relative source paths named in any markdown must exist. Absolute and `~`-rooted paths
+      // are references to a private ancestor, not to this tree, and are deliberately excluded.
+      const docs = [];
+      const walk = async (rel) => {
+        for (const name of await readdir(join(ROOT, rel), { withFileTypes: true })) {
+          if (name.name === '.git' || name.name === 'node_modules') continue;
+          const next = rel ? join(rel, name.name) : name.name;
+          if (name.isDirectory()) await walk(next);
+          else if (/\.md$/i.test(name.name)) docs.push(next);
+        }
+      };
+      await walk('');
+      const stale = [];
+      const unmarked = [];
+      const pattern = /(?<![\w~/.-])((?:extensions|src|scripts|skills|prompts|tests|data)\/[A-Za-z0-9._/-]+\.(?:ts|mjs|json|md))/g;
+      // `archive/` exists to preserve superseded statements, so a dead path there is evidence, not
+      // rot — but ONLY if the document says so. An archived doc that names a vanished file with no
+      // correction or superseded marker is indistinguishable from a live doc that went stale.
+      const MARKER = /\b(correction|superseded|archived|historical|not shipped|no longer)\b/i;
+      for (const doc of docs) {
+        const body = await read(doc);
+        const archived = doc.startsWith('archive/');
+        const dead = [];
+        for (const [, path] of body.matchAll(pattern)) if (!await exists(path)) dead.push(path);
+        if (!dead.length) continue;
+        if (!archived) stale.push(...dead.map((path) => `${doc} → ${path}`));
+        else if (!MARKER.test(body)) unmarked.push(`${doc} → ${[...new Set(dead)].join(', ')}`);
+      }
+      assert(stale.length === 0, `live docs name files that do not exist:\n  ${stale.join('\n  ')}`);
+      assert(unmarked.length === 0,
+        `archived docs name vanished files with no correction/superseded marker:\n  ${unmarked.join('\n  ')}`);
+      return ok(`${files.length} manifest roots · ${docs.length} markdown files · 0 stale live paths · archive markers present`);
+    },
+  },
+  {
+    id: 'portability',
+    title: 'portability audit names its searched roots and its file count',
+    async run() {
+      const result = await run(process.execPath, ['scripts/portability-audit.mjs']);
+      const counted = /portability-audit: (\d+) files under (.+)/.exec(result.stdout);
+      assert(counted, 'the audit must print its file count and searched roots — a clean result without coverage is not a result');
+      assert(Number(counted[1]) > 0, 'an audit over zero files is a dead audit, not a pass');
+      assert(result.code === 0, `audit failed:\n${result.stdout}${result.stderr}`);
+      return ok(`${counted[1]} files under ${counted[2]}`);
+    },
+  },
+  {
+    id: 'pi-load',
+    title: 'the package loads under `pi -e .` in non-TUI mode',
+    skipInChild: true,
+    async run() {
+      const result = await run('pi', ['-e', '.', '--list-models'], { env: { ...process.env, PI_OFFLINE: '1' } });
+      if (result.code === 127) return { skipped: true, ok: true, detail: 'pi is not on PATH in this environment — NOT verified here' };
+      return result.code === 0
+        ? ok(`pi -e . --list-models exit 0 (PI_OFFLINE=1)`)
+        : bad(`exit ${result.code}\n${result.stderr.slice(-800)}`);
+    },
+  },
+  {
+    id: 'ci-matrix',
+    title: 'CI declares Node 20 and 22 and runs this same gate',
+    async run() {
+      const dir = '.github/workflows';
+      const workflows = (await readdir(join(ROOT, dir))).filter((name) => /\.ya?ml$/.test(name));
+      assert(workflows.length > 0, 'no CI workflow found');
+      let declared = new Set(), invokes = false;
+      for (const name of workflows) {
+        const body = await read(join(dir, name));
+        for (const [, list] of body.matchAll(/node-version:\s*\[([^\]]+)\]/g)) {
+          for (const value of list.split(',')) declared.add(value.trim().replace(/['"]/g, ''));
+        }
+        for (const [, value] of body.matchAll(/node-version:\s*['"]?(\d+)['"]?\s*$/gm)) declared.add(value);
+        if (/release-check/.test(body)) invokes = true;
+      }
+      assert(declared.has('20') && declared.has('22'), `CI must declare Node 20 and 22, declares: ${[...declared].join(', ') || 'none'}`);
+      assert(invokes, 'CI must invoke the same release gate, not a parallel set of steps');
+      return ok(`node ${[...declared].sort().join(', ')} · release-check invoked`);
+    },
+  },
+];
+
+// ── mutations: each must be caught by the check it names ─────────────────────────────────────
+
+const MUTATIONS = [
+  { id: 'stale-doc', catches: 'manifest-and-docs', file: 'CLAUDE.md',
+    apply: (body) => body.replace('extensions/wos-butler.ts', 'extensions/wisdom-os.ts') },
+  { id: 'manifest-drops-src', catches: 'manifest-and-docs', file: 'package.json',
+    apply: (body) => body.replace('"src", ', '') },
+  { id: 'guard-always-fires', catches: 'guard-fixtures', file: 'src/guard-predicates.mjs',
+    apply: (body) => body.replace('export function transient(body, isError = false) {',
+      'export function transient(body, isError = false) { return true;') },
+  { id: 'envelope-drops-verifier', catches: 'return-envelope', file: 'src/return-envelope.mjs',
+    apply: (body) => body.replace("  'verified_by',\n", '') },
+  { id: 'improvement-skips-auto-disable', catches: 'improvement-governance', file: 'src/domain.mjs',
+    apply: (body) => body.replace("      ['quality auto-disable', improvement.autoDisable],\n    ],\n  }[targetStage]",
+      '    ],\n  }[targetStage]') },
+  { id: 'read-only-bypassed', catches: 'read-only-zero-bytes', file: 'extensions/wos-butler.ts',
+    apply: (body) => body.replace(/const READ_ONLY = .*/, 'const READ_ONLY = false;') },
+  { id: 'done-without-human', catches: 'lifecycle-gates', file: 'src/domain.mjs',
+    apply: (body) => body.replace("      ['human acceptance', task.acceptedByHuman === true],\n", '') },
+  { id: 'resume-loses-state', catches: 'restart-resume', file: 'src/store.mjs',
+    apply: (body) => body.replace('export async function readState(path) {',
+      'export async function readState(path) { return emptyState();') },
+  { id: 'explicit-state-root-ignored', catches: 'state-roots', file: 'src/store.mjs',
+    apply: (body) => body.replace('  if (env.WISDOM_OS_STATE) return resolve(env.WISDOM_OS_STATE);\n', '') },
+  // The leak is assembled at runtime on purpose. Written as a literal it would sit inside a
+  // packaged file and the portability audit would — correctly — fail the gate on the gate.
+  { id: 'private-path-leaks', catches: 'portability', file: 'src/domain.mjs',
+    apply: (body) => `${body}\n// state root: ${['/ho', 'me/example-user/.wis', 'dom-db'].join('')}/state\n` },
+  { id: 'ci-drops-node-20', catches: 'ci-matrix', file: '.github/workflows/ci.yml',
+    apply: (body) => body.replace(/node-version:.*/, 'node-version: 22') },
+];
+
+const COPY = ['package.json', 'cli.mjs', 'README.md', 'CLAUDE.md', 'src', 'tests', 'scripts',
+  'extensions', 'skills', 'prompts', 'data', 'docs', '.github'];
+
+async function runMutation(mutation) {
+  const dir = await mkdtemp(join(tmpdir(), `wos-neg-${mutation.id}-`));
+  try {
+    for (const entry of COPY) {
+      if (await exists(entry)) await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
+    }
+    const target = join(dir, mutation.file);
+    const original = await readFile(target, 'utf8');
+    const mutated = mutation.apply(original);
+    if (mutated === original) {
+      return { id: mutation.id, killed: false, why: 'the mutation did not change the file — it is a no-op, not a test' };
+    }
+    await writeFile(target, mutated, 'utf8');
+    const result = await run(process.execPath, [join(dir, 'scripts', 'release-check.mjs'), '--child'], { cwd: dir });
+    if (result.code === 0) {
+      return { id: mutation.id, killed: false, why: `the gate ACCEPTED a tree with ${mutation.id} — it is not a gate` };
+    }
+    const failed = [...result.stdout.matchAll(/^FAIL:(\S+)/gm)].map(([, id]) => id);
+    if (!failed.includes(mutation.catches)) {
+      return { id: mutation.id, killed: false,
+        why: `rejected, but by ${failed.join(', ') || 'no named check'} instead of ${mutation.catches} — the wrong check is holding the line` };
+    }
+    return { id: mutation.id, killed: true, why: `killed by ${mutation.catches}` };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// ── drive ────────────────────────────────────────────────────────────────────────────────────
+
+console.log('Wisdom OS Core — release gate');
+console.log(`  runtime : ${process.execPath}`);
+console.log(`  version : ${process.version}`);
+console.log(`  root    : ${ROOT}`);
+console.log(`  mode    : ${NEGATIVE ? 'NEGATIVE (mutation test)' : CHILD ? 'positive (child)' : 'positive'}`);
+console.log('');
+
+if (NEGATIVE) {
+  const results = [];
+  for (const mutation of MUTATIONS) {
+    const result = await runMutation(mutation);
+    results.push(result);
+    console.log(`${result.killed ? 'KILLED  ' : 'SURVIVED'} ${result.id.padEnd(32)} ${result.why}`);
+  }
+  const survivors = results.filter((result) => !result.killed);
+  const uncovered = CHECKS.map((check) => check.id).filter((id) => !MUTATIONS.some((m) => m.catches === id));
+  console.log('');
+  if (uncovered.length) {
+    console.log(`NOT mutation-covered (stated, not hidden): ${uncovered.join(', ')}`);
+    console.log('');
+  }
+  if (survivors.length) {
+    console.error(`NEGATIVE GATE FAILED — ${survivors.length}/${MUTATIONS.length} mutation(s) survived. The gate is not a gate.`);
+    process.exit(1);
+  }
+  console.log(`NEGATIVE GATE PASSED — ${MUTATIONS.length}/${MUTATIONS.length} mutations killed by the check that owns them.`);
+  console.log('Exiting 3 by design: --negative asserts the tree is rejectable, so it must not exit 0.');
+  process.exit(3);
+}
+
+let failures = 0, skipped = 0;
+for (const check of CHECKS) {
+  if (CHILD && check.skipInChild) {
+    console.log(`SKIP ${check.id.padEnd(26)} ${check.title} (child run)`);
+    skipped += 1;
+    continue;
+  }
+  let result;
+  try {
+    result = await check.run();
+  } catch (error) {
+    result = bad(String(error?.message ?? error));
+  }
+  if (result.skipped) {
+    skipped += 1;
+    console.log(`SKIP ${check.id.padEnd(26)} ${result.detail}`);
+  } else if (result.ok) {
+    console.log(`PASS ${check.id.padEnd(26)} ${result.detail}`);
+  } else {
+    failures += 1;
+    console.log(`FAIL:${check.id} ${check.title}`);
+    console.log(`     ${String(result.detail).split('\n').join('\n     ')}`);
+  }
+}
+
+console.log('');
+console.log(`${CHECKS.length - failures - skipped} passed · ${failures} failed · ${skipped} skipped `
+  + `· under ${process.execPath} ${process.version}`);
+if (skipped) console.log('A skipped check is NOT a passed check. It is named above.');
+process.exit(failures ? 1 : 0);

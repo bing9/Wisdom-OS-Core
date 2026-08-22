@@ -8,9 +8,11 @@
     "start": "pi -e .",
     "test": "node --test tests/*.test.mjs",
     "audit:portable": "node scripts/portability-audit.mjs",
-    "check": "node --check cli.mjs && node --check src/domain.mjs && node --check src/store.mjs && node scripts/portability-audit.mjs && npm test"
+    "release-check": "node scripts/release-check.mjs",
+    "release-check:negative": "node scripts/release-check.mjs --negative",
+    "check": "node scripts/release-check.mjs"
   },
-  "files": ["extensions", "skills", "prompts", "src", "scripts/portability-audit.mjs", "cli.mjs", "data/board.example.json", "docs"],
+  "files": ["extensions", "skills", "prompts", "src", "scripts/portability-audit.mjs", "scripts/release-check.mjs", "cli.mjs", "data/board.example.json", "docs"],
   "pi": {
     "extensions": ["./extensions/wos-guards.ts", "./extensions/wos-butler.ts", "./extensions/wos-lane.ts"],
     "skills": ["./skills"],

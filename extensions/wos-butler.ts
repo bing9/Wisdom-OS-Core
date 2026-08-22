@@ -11,8 +11,12 @@ import { join } from "node:path";
 import { activeContext, buildHandoff, computeButlerBrief, moveItem, recordProcessSignal, retrievePrecedents } from "../src/domain.mjs";
 import { ensureState, readState, updateState } from "../src/store.mjs";
 import { compact, contextBlock, textOf, topEntity } from "../src/pi-context.mjs";
+import { failOpen, killSwitch } from "../src/safety.mjs";
 
 const READ_ONLY = /^(1|true|yes)$/i.test(process.env.WISDOM_OS_READ_ONLY ?? "");
+const OFF_SENTINEL = process.env.WISDOM_OS_BUTLER_OFF ?? "";
+// One file disables passive capture immediately — no restart, no config edit.
+const disabled = OFF_SENTINEL ? killSwitch(OFF_SENTINEL) : () => false;
 const MAX_EVENTS = 500;
 const MAX_RECEIPTS = 200;
 
@@ -46,29 +50,35 @@ export default function butler(pi: ExtensionAPI) {
   });
 
   // Raw capture happens at the keystroke boundary. It records words, never invented semantics.
-  pi.on("input", async (event, ctx) => {
-    if (READ_ONLY || event.source === "extension" || event.text.trim().startsWith("/")) return;
+  //
+  // Every passive hook below is wrapped in `failOpen`. Capture is a byproduct of the turn and must
+  // never be able to end one: a lock timeout, a read-only filesystem, or a full disk costs the
+  // observation, not the user's work. The `wisdom_os` tool is deliberately NOT wrapped — a tool
+  // call that silently returns nothing is worse than one that reports why it failed.
+  pi.on("input", failOpen(async (event, ctx) => {
+    if (READ_ONLY || disabled() || event.source === "extension" || event.text.trim().startsWith("/")) return;
     await updateState(await ready(ctx), (state) => {
       state.events.push({ id: `e-${randomUUID()}`, type: "human-input", text: compact(event.text, 2000),
         sessionId: ctx.sessionManager.getSessionId?.(), createdAt: new Date().toISOString() });
       state.events = state.events.slice(-MAX_EVENTS);
       return state;
     });
-  });
+  }));
 
   // Same contract as private wos-butler: read precomputed durable state; never perform heavy work
   // in the user's turn. Unlike that private adapter, the portable state is cheap and direct.
-  pi.on("before_agent_start", async (event, ctx) => {
+  pi.on("before_agent_start", failOpen(async (event, ctx) => {
+    if (disabled()) return;
     const state = await readState(await ready(ctx));
     if (state.revision === injectedRevision) return;
     const content = contextBlock(state, event.prompt);
     if (!content) return;
     injectedRevision = state.revision;
     return { message: { customType: "wisdom-os-context", content, display: false } };
-  });
+  }));
 
-  pi.on("tool_execution_end", async (event, ctx) => {
-    if (READ_ONLY || event.toolName === "wisdom_os") return;
+  pi.on("tool_execution_end", failOpen(async (event, ctx) => {
+    if (READ_ONLY || disabled() || event.toolName === "wisdom_os") return;
     const args = event.args ?? {};
     const artifact = ["write", "edit"].includes(event.toolName) ? String(args.path ?? "") : "";
     const failed = event.isError === true;
@@ -81,10 +91,10 @@ export default function butler(pi: ExtensionAPI) {
         createdAt: new Date().toISOString() });
       return state;
     });
-  });
+  }));
 
-  pi.on("agent_settled", async (_event, ctx) => {
-    if (READ_ONLY || ctx.isIdle?.() !== true) return;
+  pi.on("agent_settled", failOpen(async (_event, ctx) => {
+    if (READ_ONLY || disabled() || ctx.isIdle?.() !== true) return;
     const leaf = String(ctx.sessionManager.getLeafId?.() ?? "");
     if (leaf && leaf === lastReceiptLeaf) return;
     lastReceiptLeaf = leaf;
@@ -99,7 +109,7 @@ export default function butler(pi: ExtensionAPI) {
     });
     turnArtifacts = new Set();
     await status(ctx);
-  });
+  }));
 
   pi.registerTool({
     name: "wisdom_os",

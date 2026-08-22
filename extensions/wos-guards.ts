@@ -1,24 +1,44 @@
 // Ported from the production `wos-guards.ts` extension.
 // Preserved: result-time transient/no-match/partial-coverage gates; append-don't-replace evidence;
-// terminal-message safety; explicit correction capture. Stripped: private incidents, paths,
-// authority registry, personal mirror, and voice/length policy.
+// explicit correction capture; gate manifest and gate telemetry carrying real-vs-synthetic
+// provenance. Stripped: private incidents, paths, authority registry, personal mirror, and
+// voice/length policy.
+//
+// TERMINAL-MESSAGE SAFETY (corrected 2026-08-22): this file previously claimed to preserve it and
+// did not — it registers no `message_end` handler, so there was nothing to protect. The predicate
+// itself is now shipped in `../src/safety.mjs` (`mayAppendTo` / `isTerminalMessage`) and
+// `scripts/release-check.mjs` fails any extension that rewrites an assistant message without it.
+// The private incident that paid for the predicate is recorded in that module's header.
 // @ts-nocheck
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import { ensureState, updateState } from "../src/store.mjs";
 import { recordProcessSignal } from "../src/domain.mjs";
+import { appendNote, failOpen, killSwitch } from "../src/safety.mjs";
+import { gateEvent, logGate, writeManifest } from "../src/gatelog.mjs";
+import { evaluateGates, GATE_IDS } from "../src/guard-predicates.mjs";
 
-const TRANSIENT = [
-  /Input\/output error/i, /Resource temporarily unavailable/i, /Stale file handle/i,
-  /Transport endpoint is not connected/i, /Connection reset|Connection refused|Broken pipe/i,
-  /\brc=124\b|\bexit(?: code)? 124\b/i, /timed out|timeout after|Operation timed out/i,
-  /Temporary failure in name resolution/i,
-];
-const SEARCHY = /\b(grep|rg|find|ls|fd|locate|glob|internal-rg)\b/;
-const NO_MATCH = [/(?:^|\n)\s*(?:exit|rc)=1\s*\n?$/, /\bEXIT:? 1\b/, /No results found/i,
-  /no matches found/i, /^\s*0\s*$/];
-const PARTIAL = /Permission denied|cannot access|cannot open|Operation not permitted/i;
+// One file disables every gate in this extension immediately.
+const OFF_SENTINEL = process.env.WISDOM_OS_GUARDS_OFF ?? "";
+const disabled = OFF_SENTINEL ? killSwitch(OFF_SENTINEL) : () => false;
+const SYNTHETIC = /^(1|true|yes)$/i.test(process.env.WISDOM_OS_GUARD_TEST ?? "");
+
+// Declared gates, keyed off the predicate module's own id list so a gate cannot be implemented
+// without being declared, or declared without existing. `release-check` asserts the two agree.
+export const GATES = GATE_IDS.map((id) => ({ id, hook: "tool_result", shipped: "2026-08-19" }));
+
+// The predicates live in ../src/guard-predicates.mjs so the test suite can import the SHIPPED
+// implementation. A regex re-declared here and again in a test proves only that the copy works.
+const NOTES: Record<string, string> = {
+  "transient-class-failure":
+    "⚠ Transient-class failure. Retry with backoff before declaring anything broken, stale, or absent.",
+  "absence-from-partial-search":
+    "⚠ No match bounds only the roots just searched. Name those roots before asserting absence; widen first when the claim is global.",
+  "partial-coverage":
+    "⚠ Partial coverage: part of the requested range was unreadable. Any absence claim must exclude it explicitly.",
+};
 
 function textOf(content: any): string {
   if (typeof content === "string") return content;
@@ -31,26 +51,36 @@ function commandOf(event: any): string {
 }
 
 export default function guards(pi: ExtensionAPI) {
-  pi.on("tool_result", async (event) => {
+  let gatePaths: { log: string; manifest: string } | null = null;
+
+  // Resolved lazily and never in extension startup: long work at load time delays every session.
+  const resolveGatePaths = failOpen(async (ctx: any) => {
+    if (gatePaths) return gatePaths;
+    const dir = dirname(await ensureState(ctx?.cwd));
+    gatePaths = { log: join(dir, "gate-events.jsonl"), manifest: join(dir, "gate-manifest.json") };
+    await writeManifest(gatePaths.manifest, GATES);
+    return gatePaths;
+  }, { fallback: null });
+
+  // Telemetry is fail-open by construction: a gate that cannot record its own hit still fires.
+  const record = failOpen(async (ctx: any, gateId: string, detail: string, command: string) => {
+    const paths = await resolveGatePaths(ctx);
+    if (!paths) return;
+    await logGate(paths.log, gateEvent({ gateId, detail, command, synthetic: SYNTHETIC }));
+  });
+
+  pi.on("tool_result", async (event, ctx) => {
+    if (disabled()) return;
     const body = textOf(event.content);
     const command = commandOf(event);
-    const notes: string[] = [];
-    const failed = event.isError === true || /\bexit=[1-9]|\brc=[1-9]|\bEXIT:? *[1-9]/.test(body);
-
-    if (failed && TRANSIENT.some((pattern) => pattern.test(body))) {
-      notes.push("⚠ Transient-class failure. Retry with backoff before declaring anything broken, stale, or absent.");
-    }
-    const search = SEARCHY.test(command) || SEARCHY.test(String(event.toolName ?? ""));
-    if (search && (body.trim() === "" || NO_MATCH.some((pattern) => pattern.test(body)))) {
-      notes.push("⚠ No match bounds only the roots just searched. Name those roots before asserting absence; widen first when the claim is global.");
-    }
-    if (search && PARTIAL.test(body)) {
-      notes.push("⚠ Partial coverage: part of the requested range was unreadable. Any absence claim must exclude it explicitly.");
-    }
+    const fired = evaluateGates({ body, command, toolName: String(event.toolName ?? ""), isError: event.isError === true });
+    const notes = fired.map((gateId) => NOTES[gateId]).filter(Boolean);
     if (!notes.length) return;
-    const content = Array.isArray(event.content) ? [...event.content] : [{ type: "text", text: body }];
-    content.push({ type: "text", text: `\n${notes.join("\n")}` });
-    return { content };
+    for (const gateId of fired) await record(ctx, gateId, body.slice(-160), command);
+    // Append, never replace: the evidence a gate reads is the evidence the reader still needs.
+    // Normalised to blocks first — a tool result is always returned to Pi in block form.
+    const blocks = Array.isArray(event.content) ? event.content : [{ type: "text", text: body }];
+    return { content: appendNote(blocks, `\n${notes.join("\n")}`) };
   });
 
   // The user or model may name a semantic class explicitly. Two instances open governed
@@ -77,12 +107,8 @@ export default function guards(pi: ExtensionAPI) {
   });
 }
 
-// Export the exact predicates for replay tests. Tests must not copy a guard's regex.
-export const __predicates = {
-  transient: (body: string, isError: boolean) =>
-    (isError || /\bexit=[1-9]|\brc=[1-9]|\bEXIT:? *[1-9]/.test(body)) && TRANSIENT.some((pattern) => pattern.test(body)),
-  noMatch: (body: string, command: string, toolName: string) =>
-    (SEARCHY.test(command) || SEARCHY.test(toolName)) && (body.trim() === "" || NO_MATCH.some((pattern) => pattern.test(body))),
-  partialCoverage: (body: string, command: string, toolName: string) =>
-    (SEARCHY.test(command) || SEARCHY.test(toolName)) && PARTIAL.test(body),
-};
+// Re-exported so a replay test can reach the SHIPPED predicates through the extension it is
+// testing. Until 2026-08-22 this block re-declared each regex inline: a test importing it would
+// have exercised a second copy while the handler used the first. The predicates now have exactly
+// one home, `../src/guard-predicates.mjs`, and both this file and the tests import it.
+export { evaluateGates, noMatch, partialCoverage, transient } from "../src/guard-predicates.mjs";

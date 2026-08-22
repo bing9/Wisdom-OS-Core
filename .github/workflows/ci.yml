@@ -7,10 +7,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both majors the package claims to support. Declaring one and documenting two is how a
+        # support claim goes untested.
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: npm run check
+          node-version: ${{ matrix.node-version }}
+      # One command is the gate. CI must not maintain a parallel set of steps that can drift from
+      # what a maintainer runs locally.
+      - run: node scripts/release-check.mjs
+      # The negative jaw: the gate must be able to reject. Exit 3 means every mutation was killed.
+      - run: node scripts/release-check.mjs --negative || test $? -eq 3
       - run: npm pack --dry-run --ignore-scripts

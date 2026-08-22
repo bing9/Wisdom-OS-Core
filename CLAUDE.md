@@ -12,7 +12,7 @@ Shared work state lives outside the model session:
 
 Before work:
 
-1. Read the context injected by `extensions/wisdom-os.ts` or run `node cli.mjs butler`.
+1. Read the context injected by `extensions/wos-butler.ts` or run `node cli.mjs butler`.
 2. Inspect the relevant task/decision and its generated handoff.
 3. Retrieve active, amended, and refuted precedents before a consequential decision.
 
@@ -32,5 +32,12 @@ Hard gates:
 - Never ship a harness control without a regression test, rollback, quality auto-disable, canary result, and independent verifier. Semantic controls also require human approval.
 - Never bypass a failed transition gate by editing JSON directly.
 - Surface at most three items needing human judgment.
+- Never append to a non-terminal assistant message. Use `mayAppendTo` from `src/safety.mjs`; a guard
+  that ends a turn on an assistant message costs more than every error it will ever catch.
+- Never describe a control as working on the strength of a synthetic hit. `src/gatelog.mjs` reports
+  `synthetic-only` separately for exactly this reason.
+
+Before shipping: `node scripts/release-check.mjs` must pass and
+`node scripts/release-check.mjs --negative` must kill every mutation (exit 3).
 
 Priority: the outcome→case→future-decision loop matters more than UI polish or agent count.
