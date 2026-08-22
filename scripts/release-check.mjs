@@ -46,7 +46,127 @@ const ok = (detail) => ({ ok: true, detail });
 const bad = (detail) => ({ ok: false, detail });
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-// ── the twelve checks ────────────────────────────────────────────────────────────────────────
+// Keep indexes stable while removing comments and, optionally, strings. The terminal-message audit
+// needs code structure, not vocabulary: a helper name in prose must never license a handler.
+function lexicalMask(source, maskStrings = true) {
+  const out = [...source];
+  let state = 'code';
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i], next = source[i + 1];
+    if (state === 'line-comment') {
+      if (char === '\n') state = 'code';
+      else out[i] = ' ';
+    } else if (state === 'block-comment') {
+      out[i] = char === '\n' ? '\n' : ' ';
+      if (char === '*' && next === '/') { out[i + 1] = ' '; i += 1; state = 'code'; }
+    } else if (state === 'single' || state === 'double' || state === 'template') {
+      if (maskStrings) out[i] = char === '\n' ? '\n' : ' ';
+      if (char === '\\') {
+        if (maskStrings && i + 1 < source.length) out[i + 1] = source[i + 1] === '\n' ? '\n' : ' ';
+        i += 1;
+      } else if ((state === 'single' && char === "'") || (state === 'double' && char === '"')
+        || (state === 'template' && char === '`')) state = 'code';
+    } else if (char === '/' && next === '/') {
+      out[i] = out[i + 1] = ' '; i += 1; state = 'line-comment';
+    } else if (char === '/' && next === '*') {
+      out[i] = out[i + 1] = ' '; i += 1; state = 'block-comment';
+    } else if (char === "'") {
+      if (maskStrings) out[i] = ' ';
+      state = 'single';
+    } else if (char === '"') {
+      if (maskStrings) out[i] = ' ';
+      state = 'double';
+    } else if (char === '`') {
+      if (maskStrings) out[i] = ' ';
+      state = 'template';
+    }
+  }
+  return out.join('');
+}
+
+function matchingParen(masked, openAt) {
+  let depth = 0;
+  for (let i = openAt; i < masked.length; i += 1) {
+    if (masked[i] === '(') depth += 1;
+    else if (masked[i] === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function splitTopLevel(source) {
+  const masked = lexicalMask(source);
+  const parts = [];
+  let start = 0, round = 0, square = 0, curly = 0;
+  for (let i = 0; i < masked.length; i += 1) {
+    if (masked[i] === '(') round += 1;
+    else if (masked[i] === ')') round -= 1;
+    else if (masked[i] === '[') square += 1;
+    else if (masked[i] === ']') square -= 1;
+    else if (masked[i] === '{') curly += 1;
+    else if (masked[i] === '}') curly -= 1;
+    else if (masked[i] === ',' && round === 0 && square === 0 && curly === 0) {
+      parts.push(source.slice(start, i)); start = i + 1;
+    }
+  }
+  parts.push(source.slice(start));
+  return parts;
+}
+
+function piOnCalls(source) {
+  const masked = lexicalMask(source);
+  const calls = [];
+  const pattern = /\bpi\s*\.\s*on\s*\(/g;
+  for (const match of masked.matchAll(pattern)) {
+    const open = masked.indexOf('(', match.index);
+    const close = matchingParen(masked, open);
+    if (close >= 0) calls.push(source.slice(open + 1, close));
+  }
+  return calls;
+}
+
+function directGuardedMessageRewrite(handler) {
+  const masked = lexicalMask(handler);
+  let round = 0, square = 0, curly = 0, arrow = -1;
+  for (let i = 0; i < masked.length - 1; i += 1) {
+    if (masked[i] === '(') round += 1;
+    else if (masked[i] === ')') round -= 1;
+    else if (masked[i] === '[') square += 1;
+    else if (masked[i] === ']') square -= 1;
+    else if (masked[i] === '{') curly += 1;
+    else if (masked[i] === '}') curly -= 1;
+    else if (masked.slice(i, i + 2) === '=>' && round === 0 && square === 0 && curly === 0) { arrow = i; break; }
+  }
+  if (arrow < 0) return false;
+
+  let left = lexicalMask(handler.slice(0, arrow), false).trim().replace(/^async\s+/, '').trim();
+  if (left.startsWith('(') && left.endsWith(')')) {
+    const parameters = splitTopLevel(left.slice(1, -1));
+    if (parameters.length !== 1) return false;
+    left = parameters[0].trim();
+  }
+  const parameter = /^([A-Za-z_$][\w$]*)(?:\s*:\s*(?:any|unknown))?$/.exec(left);
+  const eventName = parameter?.[1];
+  if (!eventName) return false;
+
+  const right = handler.slice(arrow + 2).trim().replace(/;\s*$/, '');
+  const rightMask = lexicalMask(right);
+  const guarded = /^guardedMessageRewrite\s*\(/.exec(rightMask);
+  if (!guarded) return false;
+  const open = rightMask.indexOf('(', guarded.index);
+  const close = matchingParen(rightMask, open);
+  if (close < 0 || rightMask.slice(close + 1).trim()) return false;
+  const args = splitTopLevel(right.slice(open + 1, close));
+  if (args.length !== 2 || args[0].trim() !== eventName) return false;
+
+  // Arguments are evaluated before the helper runs. The note therefore has to be inert: a
+  // precomputed identifier or string literal, never `noteFor(event)` or `event["message"]...`.
+  const note = args[1].trim();
+  const identifier = /^[A-Za-z_$][\w$]*$/.test(note) && note !== eventName;
+  const stringLiteral = /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$/.test(note);
+  return identifier || stringLiteral;
+}
+
+// ── release checks ───────────────────────────────────────────────────────────────────────────
 
 const CHECKS = [
   {
@@ -228,36 +348,54 @@ const CHECKS = [
       const rewritten = safety.guardedMessageRewrite(terminal, '\nNOTE');
       assert(rewritten?.message?.content?.length === 2 && rewritten.message.content[0].text === 'done',
         'a terminal message must be appended to, with the original preserved');
+      assert(directGuardedMessageRewrite('async (event: any) => guardedMessageRewrite(event, note)'),
+        'the direct sanctioned handler shape must remain usable');
 
-      // 2. No extension may reach `event.message` outside that path. Three independent grounds, so
-      //    a writer has to defeat all three: registering the hook, spreading the message, or
-      //    reading its content back into a return.
+      // 2. Audit each registration, not the whole file. A `message_end` callback is allowed only
+      //    in one mechanically recognisable form: a direct expression-arrow return from
+      //    `guardedMessageRewrite(event, note)`, imported from the shipped safety module. `note`
+      //    must be an inert identifier or string because arguments run before the guard. Blocks,
+      //    aliases, raw message access, calls, and unrelated helper mentions are all rejected.
       const files = (await readdir(join(ROOT, 'extensions'))).filter((name) => /\.(ts|mjs)$/.test(name));
       assert(files.length > 0, 'no extensions found to audit');
-      const SANCTIONED = /guardedMessageRewrite\s*\(|mayAppendTo\s*\(|isTerminalMessage\s*\(/;
       const offences = [];
+      let handlers = 0;
       for (const name of files) {
         const body = await read(join('extensions', name));
-        const guarded = SANCTIONED.test(body);
-        if (/pi\.on\(\s*["'`]message_end["'`]/.test(body) && !guarded) {
-          offences.push(`${name}: registers message_end without the terminal-message predicate`);
+        const executable = lexicalMask(body, false);
+        const messageEndLiterals = [...executable.matchAll(/(["'`])message_end\1/g)].length;
+        const safetyImports = [...executable.matchAll(
+          /^\s*import\s*\{([^}]*)\}\s*from\s*["']\.\.\/src\/safety\.mjs["']\s*;?\s*$/gm)];
+        const importsGuard = safetyImports.some(([, specifiers]) => splitTopLevel(specifiers)
+          .some((specifier) => specifier.trim() === 'guardedMessageRewrite'));
+        let auditedHandlers = 0;
+        for (const argsSource of piOnCalls(body)) {
+          const args = splitTopLevel(argsSource);
+          if (!/^(?:["']message_end["']|`message_end`)$/.test(args[0]?.trim() ?? '')) continue;
+          handlers += 1;
+          auditedHandlers += 1;
+          if (!importsGuard || !directGuardedMessageRewrite(args[1] ?? '')) {
+            offences.push(`${name}: message_end must directly return guardedMessageRewrite(event, note) from safety.mjs`);
+          }
         }
-        for (const [, snippet] of [...body.matchAll(/(\.\.\.\s*event\.message\b[^\n]*)/g)]) {
-          if (!guarded) offences.push(`${name}: spreads event.message unguarded — ${snippet.trim().slice(0, 60)}`);
+        if (messageEndLiterals !== auditedHandlers) {
+          offences.push(`${name}: found ${messageEndLiterals} executable message_end literal(s) but audited ${auditedHandlers} direct pi.on registration(s)`);
         }
-        for (const [, snippet] of [...body.matchAll(/(event\.message\.content[^\n]*)/g)]) {
-          if (!guarded) offences.push(`${name}: reads event.message.content unguarded — ${snippet.trim().slice(0, 60)}`);
+        const helperMentions = [...lexicalMask(body).matchAll(/\bguardedMessageRewrite\b/g)].length;
+        const expectedHelperMentions = (importsGuard ? 1 : 0) + auditedHandlers;
+        if (helperMentions !== expectedHelperMentions) {
+          offences.push(`${name}: guardedMessageRewrite must be one exact import plus one call per audited handler; found ${helperMentions}, expected ${expectedHelperMentions}`);
         }
       }
       assert(offences.length === 0,
-        `an assistant message is rewritten without the terminal-message predicate:\n  ${[...new Set(offences)].join('\n  ')}`);
+        `an assistant message handler is not structurally tied to the sanctioned rewrite:\n  ${[...new Set(offences)].join('\n  ')}`);
 
       // 3. The headers that make the claim must name the enforcement, so the two cannot drift apart
       //    again without this check noticing.
       const guardsHeader = await read('extensions/wos-guards.ts');
       assert(/release-check/.test(guardsHeader) && /safety\.mjs/.test(guardsHeader),
         'the file claiming terminal-message safety must name where it is enforced');
-      return ok(`${files.length} extensions audited · sanctioned path refuses mid-flight · 3 independent grounds`);
+      return ok(`${files.length} extensions audited · ${handlers} message_end handlers · direct sanctioned return required · mid-flight refused`);
     },
   },
   {
@@ -668,6 +806,62 @@ const MUTATIONS = [
     message: { ...event.message,
       content: [...event.message.content, { type: "text", text: "unsafe verifier mutation" }] },
   }));`) },
+  // Round-2 verifier's EXACT adjacent bypass, kept separately from the round-1 mutation above.
+  // A file-wide helper-name check accepted the unsafe handler because this unrelated comment named
+  // the helper. The handler itself never routes through it.
+  { id: 'terminal-safety-symbol-mention-bypass', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {\n  let gatePaths: { log: string; manifest: string } | null = null;',
+      `export default function guards(pi: ExtensionAPI) {
+  pi.on("message_end", async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe verifier mutation" }] },
+  }));
+  let gatePaths: { log: string; manifest: string } | null = null;
+
+  // guardedMessageRewrite() — unrelated mention; the unsafe handler above still bypasses it.`) },
+  // Independent round-3 pre-freeze verifier bypass: alternate property syntax escaped the first
+  // callback scanner. Every executable message_end literal must belong to an audited registration.
+  { id: 'terminal-safety-bracket-registration-bypass', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  pi["on"]("message_end", async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe bracket mutation" }] },
+  }));`) },
+  // Independent verifier's second pre-freeze bypass: argument evaluation mutated the message
+  // before guardedMessageRewrite could refuse it.
+  { id: 'terminal-safety-side-effecting-note-bypass', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('import { appendNote, failOpen, killSwitch } from "../src/safety.mjs";',
+      'import { appendNote, failOpen, guardedMessageRewrite, killSwitch } from "../src/safety.mjs";')
+      .replace('export default function guards(pi: ExtensionAPI) {',
+        `function unsafeNote(event: any) {
+  event.message.content.push({ type: "text", text: "unsafe helper mutation" });
+  return "NOTE";
+}
+
+export default function guards(pi: ExtensionAPI) {
+  pi.on("message_end", async (event: any) => guardedMessageRewrite(event, unsafeNote(event)));`) },
+  // The bracket form of the same pre-guard side effect must not evade dotted-access checks.
+  { id: 'terminal-safety-bracket-message-bypass', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('import { appendNote, failOpen, killSwitch } from "../src/safety.mjs";',
+      'import { appendNote, failOpen, guardedMessageRewrite, killSwitch } from "../src/safety.mjs";')
+      .replace('export default function guards(pi: ExtensionAPI) {',
+        `export default function guards(pi: ExtensionAPI) {
+  pi.on("message_end", async (event: any) => guardedMessageRewrite(event,
+    (event["message"].content.push({ type: "text", text: "unsafe bracket mutation" }), "NOTE")));`) },
+  // Independent verifier's third pre-freeze bypass: an aliased real import made a locally shadowed
+  // unsafe function look sanctioned by name. The local binding now has to be exact and unshadowed.
+  { id: 'terminal-safety-import-alias-shadow-bypass', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('import { appendNote, failOpen, killSwitch } from "../src/safety.mjs";',
+      'import { appendNote, failOpen, guardedMessageRewrite as sanctionedGuard, killSwitch } from "../src/safety.mjs";')
+      .replace('export default function guards(pi: ExtensionAPI) {',
+        `function guardedMessageRewrite(event: any, note: string) {
+  event.message.content.push({ type: "text", text: note });
+  return { message: event.message };
+}
+
+export default function guards(pi: ExtensionAPI) {
+  pi.on("message_end", async (event: any) => guardedMessageRewrite(event, "unsafe shadow mutation"));`) },
   // The sanctioned path must also be the only one that works: neuter it and the gate must notice.
   { id: 'sanctioned-rewrite-stops-refusing', catches: 'terminal-message-safety', file: 'src/safety.mjs',
     apply: (body) => body.replace('  if (!note || !mayAppendTo(message)) return undefined;',

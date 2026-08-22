@@ -24,7 +24,7 @@ Two Node majors are reachable on the maintainer's host and they disagree about w
 | bundled | dotslash-managed Node 24 | v24.10.0 | 15 passed · 0 failed · exit 0 | `55 pass / 0 fail of 55` — counts **subtests** |
 
 `/usr/local/bin/node` and `/usr/bin/node` resolve to the same v16 binary; there are two runtimes
-here, not three. Negative gate: **20/20 mutations killed, exit 3**, under both.
+here, not three. Negative gate: **25/25 mutations killed, exit 3**, under both.
 
 > **Counts corrected 2026-08-22.** This table first read `12 passed` and `40 pass`. Both were true
 > when written and stale by the time they were read: I recorded the number, then added tests and
@@ -59,7 +59,7 @@ issue:** 49 KB of incident-paid live extension logic has no version history.
 
 | Mechanism | Public home | Private source | Test handle |
 |---|---|---|---|
-| Terminal-message safety — a guard may append only to an assistant message carrying no tool-call block | `src/safety.mjs` `guardedMessageRewrite` / `isTerminalMessage` / `mayAppendTo` | `wos-guards.ts` `message_end` (untracked, sha `7b669247d796`, lines 566–642); incident 2026-08-19 — appending mid-flight produced a provider rejection for assistant prefill and cost a turn | `tests/safety.test.mjs`; gate check **`terminal-message-safety`**; mutations `unsafe-message-end-writer`, `sanctioned-rewrite-stops-refusing` |
+| Terminal-message safety — a guard may append only to an assistant message carrying no tool-call block | `src/safety.mjs` `guardedMessageRewrite` / `isTerminalMessage` / `mayAppendTo` | `wos-guards.ts` `message_end` (untracked, sha `7b669247d796`, lines 566–642); incident 2026-08-19 — appending mid-flight produced a provider rejection for assistant prefill and cost a turn | `tests/safety.test.mjs`; gate check **`terminal-message-safety`**; mutations `unsafe-message-end-writer`, `terminal-safety-symbol-mention-bypass`, `terminal-safety-bracket-registration-bypass`, `terminal-safety-side-effecting-note-bypass`, `terminal-safety-bracket-message-bypass`, `terminal-safety-import-alias-shadow-bypass`, `sanctioned-rewrite-stops-refusing` |
 | Append-don't-replace note attachment across every content shape | `src/safety.mjs` `appendNote` / `textOf` | same file, sha `7b669247d796` | `tests/safety.test.mjs` ("a single-block object keeps its original content") |
 | One-file kill switch + fail-open wrapper: a control must never propagate its own failure into the turn | `src/safety.mjs` `killSwitch` / `failOpen`, wired into all three passive butler hooks and the guards handler | `wos-butler.ts` `off()` (sha `3fb16e925655`, lines 51–58) and `wos-guards.ts` `off()` (sha `7b669247d796`, line 137) | `tests/safety.test.mjs`; gate check `read-only-zero-bytes` |
 | Gate manifest that never re-dates an existing gate, and retires rather than drops | `src/gatelog.mjs` `gateManifest` / `writeManifest` | `wos-guards.ts` `writeManifest` (sha `7b669247d796`, lines 96–113) | `tests/gatelog.test.mjs` |
@@ -67,7 +67,7 @@ issue:** 49 KB of incident-paid live extension logic has no version history.
 | Result-time predicates extracted so tests import the shipped implementation | `src/guard-predicates.mjs` | `wos-guards.ts` `__predicates` (sha `7b669247d796`, lines 149–186, 684+) | `tests/guard-predicates.test.mjs`; gate check `guard-fixtures` |
 | Delegation return transaction **contract**: envelope completeness, verifier independence, exact-session binding, exactly-once delivery, idle ≠ completion, declared missing-report recovery | `src/return-envelope.mjs` | `pi_extensions/wos-return.ts` + `fleet/return_channel.py`; commits `4fcea78`, `ad88333`, `10bb491`, `f194de7`, `220b64f`, `23f2676`, `c67eb8e`, `b311d81`, `14fe195` | `tests/return-envelope.test.mjs`; gate check `return-envelope`; mutation `envelope-drops-verifier` |
 | Evidence separated from lifecycle — passing evidence is not DONE | already in `src/domain.mjs`; now **pinned by the gate** | commits `f6a8a21`, `8ccc9aa` (the A39 P0) | gate check `lifecycle-gates`; mutation `done-without-human` |
-| The release gate itself: check-don't-grep, negative control that must kill | `scripts/release-check.mjs` | commits `0c17b3f`, `7d98fd8`, `83e056a`, `d01286c` | `--negative`, 20 mutations |
+| The release gate itself: check-don't-grep, negative control that must kill | `scripts/release-check.mjs` | commits `0c17b3f`, `7d98fd8`, `83e056a`, `d01286c` | `--negative`, 25 mutations |
 
 ### ALREADY-COVERED
 
@@ -126,8 +126,8 @@ Reported first, because they are the one thing a director cannot obtain another 
 
 ## Coverage limits — stated, not hidden
 
-- `unit-suite` and `pi-load` are **not** mutation-covered. `unit-suite` is the substrate every other mutation runs through; `pi-load` needs the `pi` binary resolvable inside a temporary copy.
-- The negative gate mutates 11 conditions across 10 of the 12 checks. It does not prove the absence of other bypasses.
+- `unit-suite` is **not** mutation-covered because it is the substrate every other mutation runs through.
+- The negative gate mutates 25 conditions across 14 of the 15 checks. It does not prove the absence of other bypasses.
 - Node 20 and 22 remain CI-declared and locally unrun.
 - Gate telemetry ships with **zero live hits by construction** — the coverage report will read `never` for all three gates until the package runs somewhere real. That is the honest state, and `gateCoverage` reports it rather than counting installation as evidence.
 
@@ -205,13 +205,59 @@ downgraded.
 after a correlated **PASS**; this was a FAIL. Live extension loading is untouched, and A53-c11..c13
 is not started.
 
+## Independent verification round 2 — FAIL on `284feb9`, and the bounded repair
+
+`wos-core-sync-verifier` returned **FAIL** at 2026-08-22T15:11:43Z (inbox row
+`20260822T151143-b72058`). The round-1 mutation was killed, but an adjacent bypass survived: the
+unsafe raw `message_end` writer plus the unrelated comment `// guardedMessageRewrite()` exited 0
+and reported 15/15 under both Node 16 and Node 24.
+
+The cause was one file-wide `SANCTIONED` boolean. Any call-like mention of
+`guardedMessageRewrite`, `mayAppendTo`, or `isTerminalMessage` licensed every handler in that file.
+That checked vocabulary, not wiring.
+
+The bounded repair removes that boolean. The gate now lexically isolates every real `pi.on(...)`
+registration (comments and strings cannot create evidence), finds each `message_end` callback, and
+accepts only a direct expression-arrow return of `guardedMessageRewrite(event, note)` imported from
+`src/safety.mjs`. The note must be an inert precomputed identifier or string literal, because
+arguments execute before the helper. Callback blocks, aliases, raw message access, calls, and
+unrelated comments are rejected. The exact round-2 patch is permanent mutation
+`terminal-safety-symbol-mention-bypass`; the exact round-1 `unsafe-message-end-writer` mutation is
+unchanged. Both are killed by `terminal-message-safety` under both available runtimes.
+
+Independent verification then returned **FAIL** on the first repair candidate `17adfb8`: the exact
+adjacent mutation was dead, but `pi["on"]("message_end", rawHandler)` was accepted because the
+scanner recognised only dot-property registration. That FAIL is not rewritten here. The same
+single repair commit was amended so every executable `message_end` literal must be accounted for by
+an audited direct `pi.on` registration; the bracket-property bypass is now permanent mutation
+`terminal-safety-bracket-registration-bypass`.
+
+Independent verification returned **FAIL again** on the second candidate `06c09ff`: a syntactically
+sanctioned call could evaluate `unsafeNote(event)` before `guardedMessageRewrite` ran, and that helper
+could mutate `event.message.content`; bracket access inside the note argument did the same. That FAIL
+also remains in the record. The callback contract now requires exactly two arguments, with the note
+limited to an inert identifier or string literal. The two exact classes are permanent mutations
+`terminal-safety-side-effecting-note-bypass` and `terminal-safety-bracket-message-bypass`.
+
+Independent verification returned **FAIL a third time** on candidate `cd1b585`: an aliased real
+import plus a local unsafe function named `guardedMessageRewrite` passed the name-based import check.
+That FAIL remains in the record. The gate now requires the exact unaliased local import binding and
+allows no extra executable uses of the trusted identifier beyond that import and one call per
+audited handler. The exact class is permanent mutation
+`terminal-safety-import-alias-shadow-bypass`. Defaulted or complex handler parameters are also
+rejected; only a single plain parameter, optionally typed `any` or `unknown`, is accepted.
+
+This is a producer repair, not acceptance. The new frozen SHA still requires an independent
+`wos-core-sync-verifier` result before any integration or delivery rail can move.
+
 ## Commits
 
 | SHA | Contents |
 |---|---|
 | `572d01b` | the sync RC — ported mechanisms, five corrections, the 12-check release gate |
 | `539782d` | A53-c9/c10 — the continuous-improvement loop, checks 13/14, six further mutations |
-| repair commit | verifier round-1 repairs — check 15 `terminal-message-safety`, required-check enforcement, `appendNote` fix, inventory and count corrections, three further mutations |
+| `284feb9` | verifier round-1 repairs — check 15 `terminal-message-safety`, required-check enforcement, `appendNote` fix, inventory and count corrections, three further mutations |
+| round-3 repair (this document's commit) | handler-local structural enforcement; exact adjacent, alternate-registration, pre-guard side-effect, and import-shadow mutations; all pre-freeze FAIL evidence |
 
-15 checks · 20 mutations. No push, no npm publish, no tag, and no change to live private extension
-loading. A53 moves to `READY FOR REVIEW` only.
+15 checks · 25 mutations. No push, no npm publish, no tag, and no change to live private extension
+loading. A53 remains `READY FOR REVIEW` only.

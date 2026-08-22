@@ -127,7 +127,7 @@ One command is the gate, and it has two jaws:
 
 ```bash
 node scripts/release-check.mjs             # 15 checks — must exit 0
-node scripts/release-check.mjs --negative  # 20 mutations — must exit 3
+node scripts/release-check.mjs --negative  # 25 mutations — must exit 3
 ```
 
 A **required** check that does not run is a failure, not a note. Waiving one is explicit
