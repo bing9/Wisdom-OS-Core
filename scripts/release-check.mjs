@@ -413,6 +413,146 @@ const CHECKS = [
     },
   },
   {
+    // A53-c9 — the loop is a loop: bounded, coalescing, able to retire, and reaching a human.
+    id: 'dream-loop',
+    title: 'A53-c9 improvement loop: bounded triggers, retirement, coalescing, human surface',
+    async run() {
+      const d = await import(join(ROOT, 'src/dream.mjs'));
+      const { emptyState } = await import(join(ROOT, 'src/store.mjs'));
+      const NOW = '2026-08-22T12:00:00.000Z', OLD = '2026-06-01T00:00:00.000Z';
+
+      // Bounded: every trigger has a numeric bound and every refusal is explained.
+      for (const key of ['turnsPerRun', 'minMinutesBetweenRuns', 'correctionThreshold',
+        'maxRunsPerSession', 'maxProposalsPerRun', 'maxJournalRuns']) {
+        assert(Number.isFinite(d.DREAM_DEFAULTS[key]) && d.DREAM_DEFAULTS[key] > 0,
+          `bound ${key} must be an explicit positive number`);
+      }
+      assert(d.shouldRun(d.emptyDream(), { now: NOW }).run === false, 'the loop must not run unprompted');
+      assert(d.shouldRun(d.emptyDream(), { now: NOW, pendingCorrections: 2 }).trigger === 'correction-failure');
+      assert(d.shouldRun({ ...d.emptyDream(), cursor: { turns: 999, lastRunAt: '', runsThisSession: d.DREAM_DEFAULTS.maxRunsPerSession } },
+        { now: NOW }).run === false, 'the per-session ceiling must hold');
+
+      // SCAR 1 — the emitter must be ABLE to produce a retirement. If no fixture yields one, the
+      // verb is decorative and the loop can only ever agree with itself.
+      assert(d.PROPOSAL_VERBS.includes('retire') && d.PROPOSAL_VERBS.includes('refute'),
+        'retire and refute must be first-class verbs');
+      const retire = d.propose({ now: NOW, signals: [], precedentUses: [],
+        cases: [{ id: 'case-b', status: 'active', reviewDate: OLD }] });
+      assert(retire.length === 1 && retire[0].verb === 'retire',
+        'a stale, unused belief must yield a RETIREMENT proposal — 55 accepts and 0 retirements is the failure this prevents');
+      const refute = d.propose({ now: NOW, signals: [], precedentUses: [],
+        cases: [{ id: 'case-a', status: 'active', falsifier: 'f', falsifierObserved: 'obs-1' }] });
+      assert(refute.length === 1 && refute[0].verb === 'refute', 'a fired falsifier must yield a REFUTATION proposal');
+      assert(d.propose({ now: NOW, signals: [], cases: [{ id: 'case-b', status: 'active', reviewDate: OLD }],
+        precedentUses: [{ caseId: 'case-b', at: '2026-08-20T00:00:00.000Z' }] }).length === 0,
+        'a belief in active use must be protected from retirement');
+
+      // SCAR 3 — the coalescer must not read what this loop writes. The fixture deliberately
+      // contains BOTH a foreign row and a loop-produced one, so the exclusion is observable; a
+      // state with nothing of the loop's own in it cannot tell the two implementations apart.
+      const mixed = {
+        processSignals: [{ id: 's-real', klass: 'k' }, { id: 's-mine', klass: 'k', producedBy: d.PRODUCED_BY }],
+        events: [{ id: 'e-real' }, { id: 'e-mine', producedBy: d.PRODUCED_BY }],
+        cases: [{ id: 'c-real' }, { id: 'c-mine', producedBy: d.PRODUCED_BY }],
+      };
+      const filtered = d.selectEvents(mixed);
+      assert(filtered.signals.length === 1 && filtered.signals[0].id === 's-real',
+        'a loop-produced SIGNAL must not re-enter as evidence — this is how a counter measures its own template');
+      assert(filtered.events.length === 1 && filtered.events[0].id === 'e-real', 'loop-produced events must be excluded');
+      assert(filtered.cases.length === 1 && filtered.cases[0].id === 'c-real', 'loop-produced cases must be excluded');
+
+      const full = { landing: 'l', proof: 'p', cost: 'c', falsifier: 'f', rollback: 'r', autoDisable: 'a' };
+      const one = d.makeProposal({ verb: 'add', subject: 'k', evidenceIds: ['s1'], now: NOW, ...full });
+      const emitted = d.emit(emptyState(), { trigger: 'session', proposals: [one], now: NOW });
+      assert(d.selectEvents(emitted).signals.length === 0,
+        'an emitted proposal must not re-enter as evidence for itself');
+      assert(emitted.improvements.every((item) => item.producedBy === d.PRODUCED_BY),
+        'everything the loop writes must be stamped so it can exclude it later');
+      const two = d.makeProposal({ verb: 'add', subject: 'k', evidenceIds: ['s2'], now: NOW, ...full });
+      const folded = d.coalesce([one, two], []);
+      assert(folded.fresh.length === 1 && folded.fresh[0].evidenceIds.length === 2,
+        'duplicates must coalesce with their evidence unioned');
+      assert(d.coalesce([two], [one]).fresh.length === 0, 'an already-open proposal must be strengthened, not duplicated');
+
+      // SCAR 2 — an emitted proposal must land on a surface a human opens.
+      const surfaced = d.makeProposal({ verb: 'retire', subject: 'case-b', semantic: true, now: NOW, ...full });
+      const after = d.emit(emptyState(), { trigger: 'session', proposals: [surfaced], now: NOW });
+      assert(d.reachesHumanSurface(after, surfaced.id, NOW),
+        'an emitted proposal that never reaches the Butler brief is a detector with zero callers');
+      assert(!d.reachesHumanSurface(emptyState(), surfaced.id, NOW), 'the surface check must be able to fail');
+
+      // Non-blocking: the adapter does its work on settle, never at startup.
+      const ext = await read('extensions/wos-dream.ts');
+      assert(/pi\.on\("agent_settled"/.test(ext), 'the loop must be driven by agent_settled');
+      assert(/ctx\.isIdle\?\.\(\) !== true/.test(ext), 'the loop must only run when the agent is idle');
+      assert(/setTimeout\(\(\) => \{ void cycle\(ctx\); \}, 0\)/.test(ext),
+        'the run must be detached from the settle handler so it cannot hold the turn open');
+      const startup = /pi\.on\("session_start"[\s\S]*?\}\);/.exec(ext)?.[0] ?? '';
+      assert(!/updateState|readState|ensureState|propose\(/.test(startup),
+        'extension startup must do no work — it is paid by every session forever');
+      return ok(`4 verbs incl. retire+refute · ${d.DREAM_DEFAULTS.maxProposalsPerRun}/run · coalesces · reaches the Butler brief`);
+    },
+  },
+  {
+    // A53-c10 — governance: nothing self-applies, and the auto-disable can actually fire.
+    id: 'dream-governance',
+    title: 'A53-c10 governance: LANDING/PROOF/COST, human gate, independent verifier, auto-disable fires',
+    async run() {
+      const d = await import(join(ROOT, 'src/dream.mjs'));
+      const { emptyState, normalizeState } = await import(join(ROOT, 'src/store.mjs'));
+      const NOW = '2026-08-22T12:00:00.000Z';
+      const base = d.makeProposal({ verb: 'add', subject: 'k', semantic: false, evidenceIds: ['e1'],
+        maker: 'm', verifier: 'v', now: NOW,
+        landing: 'l', proof: 'p', cost: 'c', falsifier: 'f', rollback: 'r', autoDisable: 'a' });
+      assert(d.canApply(base).ok, 'a fully governed mechanical proposal must be applicable');
+
+      for (const [field, label] of [['landing', 'landing'], ['proof', 'proof'], ['cost', 'cost'],
+        ['falsifier', 'falsifier'], ['rollback', 'rollback'], ['autoDisable', 'quality auto-disable']]) {
+        const gate = d.canApply({ ...base, [field]: '' });
+        assert(!gate.ok && gate.missing.includes(label), `${label} must be required to apply`);
+      }
+      assert(d.canApply({ ...base, verifier: '' }).missing.includes('independent verifier'));
+      assert(d.canApply({ ...base, verifier: 'm' }).missing.includes('verifier distinct from maker'),
+        'the maker must not verify their own proposal');
+
+      // The human gate is a GATE, not a comment: a semantic change cannot self-apply.
+      const semantic = { ...base, semantic: true, needsHumanApproval: true };
+      assert(!d.canApply(semantic).ok && d.canApply(semantic).missing.includes('human approval for a semantic change'),
+        'a semantic change must not be able to apply itself');
+      assert(d.canApply({ ...semantic, approvedByHuman: true }).ok, 'human approval must unblock it');
+      // Every proposal the emitter derives from a belief is semantic, so none can self-apply.
+      const derived = d.propose({ now: NOW, signals: [], precedentUses: [],
+        cases: [{ id: 'c', status: 'active', reviewDate: '2026-06-01T00:00:00.000Z' }] });
+      assert(derived.every((item) => item.needsHumanApproval === true && item.approvedByHuman !== true),
+        'a belief-level proposal must always require a human call');
+
+      // AUTO-DISABLE MUST BE ABLE TO FIRE.
+      const runs = Array.from({ length: d.DREAM_DEFAULTS.minRunsBeforeQualityCheck }, (_, i) => ({ id: `r${i}` }));
+      const p = (i, stage) => ({ id: `p${i}`, producedBy: d.PRODUCED_BY, stage });
+      assert(d.qualityVerdict({ dream: { ...d.emptyDream(), runs },
+        improvements: [p(1, 'proposed'), p(2, 'proposed'), p(3, 'disabled')] }).disable === false,
+        'a healthy loop must stay live');
+      const verdict = d.qualityVerdict({ dream: { ...d.emptyDream(), runs },
+        improvements: [p(1, 'disabled'), p(2, 'disabled'), p(3, 'proposed')] });
+      assert(verdict.disable === true, 'a rejection rate over the limit MUST disable the loop');
+      const killed = d.applyQualityVerdict({ ...emptyState(), dream: { ...d.emptyDream(), runs } }, verdict);
+      assert(killed.dream.disabled === true, 'the verdict must actually be applied');
+      assert(d.shouldRun(killed.dream, { now: NOW, pendingCorrections: 99 }).run === false,
+        'a disabled loop must not be re-armed by a loud trigger');
+      assert(normalizeState(JSON.parse(JSON.stringify(killed))).dream.disabled === true,
+        'an auto-disable a reload clears is a pause, not a kill switch');
+      assert(d.qualityVerdict({ dream: { ...d.emptyDream(), runs },
+        improvements: [{ id: 'h', stage: 'disabled' }] }).disable === false,
+        'proposals the loop did not produce must not disable it');
+
+      const ext = await read('extensions/wos-dream.ts');
+      assert(/WISDOM_OS_DREAM_OFF/.test(ext), 'the loop needs a one-file kill switch');
+      assert(/READ_ONLY/.test(ext), 'the loop must not write in a read-only session');
+      assert(!/canApply\([^)]*\)\s*&&[\s\S]{0,80}apply/.test(ext), 'the adapter must never apply a proposal');
+      return ok('6 envelope fields + independent verifier enforced · semantic cannot self-apply · auto-disable fires and survives reload');
+    },
+  },
+  {
     id: 'ci-matrix',
     title: 'CI declares Node 20 and 22 and runs this same gate',
     async run() {
@@ -441,7 +581,7 @@ const MUTATIONS = [
   { id: 'stale-doc', catches: 'manifest-and-docs', file: 'CLAUDE.md',
     apply: (body) => body.replace('extensions/wos-butler.ts', 'extensions/wisdom-os.ts') },
   { id: 'manifest-drops-src', catches: 'manifest-and-docs', file: 'package.json',
-    apply: (body) => body.replace('"src", ', '') },
+    apply: (body) => body.replace(/^\s*"src",\n/m, '') },
   { id: 'guard-always-fires', catches: 'guard-fixtures', file: 'src/guard-predicates.mjs',
     apply: (body) => body.replace('export function transient(body, isError = false) {',
       'export function transient(body, isError = false) { return true;') },
@@ -465,6 +605,23 @@ const MUTATIONS = [
     apply: (body) => `${body}\n// state root: ${['/ho', 'me/example-user/.wis', 'dom-db'].join('')}/state\n` },
   { id: 'ci-drops-node-20', catches: 'ci-matrix', file: '.github/workflows/ci.yml',
     apply: (body) => body.replace(/node-version:.*/, 'node-version: 22') },
+
+  // A53-c9/c10. Each targets one of the three failure modes the private loop already exhibited.
+  { id: 'retirement-is-decorative', catches: 'dream-loop', file: 'src/dream.mjs',
+    apply: (body) => body.replace("      if (!used) {", '      if (false) {') },
+  { id: 'coalescer-eats-own-output', catches: 'dream-loop', file: 'src/dream.mjs',
+    apply: (body) => body.replace('  const mine = (row) => row?.producedBy === PRODUCED_BY;',
+      '  const mine = () => false;') },
+  { id: 'proposal-never-surfaces', catches: 'dream-loop', file: 'src/dream.mjs',
+    apply: (body) => body.replace("    stage: 'proposed', priority: 'P1',", "    stage: 'parked', priority: 'P1',") },
+  { id: 'semantic-self-applies', catches: 'dream-governance', file: 'src/dream.mjs',
+    apply: (body) => body.replace(
+      "  if (proposal.needsHumanApproval === true && proposal.approvedByHuman !== true) missing.push('human approval for a semantic change');\n", '') },
+  { id: 'auto-disable-never-fires', catches: 'dream-governance', file: 'src/dream.mjs',
+    apply: (body) => body.replace('  return rate >= bounds.rejectionRateLimit', '  return false') },
+  { id: 'auto-disable-clears-on-reload', catches: 'dream-governance', file: 'src/store.mjs',
+    apply: (body) => body.replace('  state.dream.disabled = state.dream.disabled === true;',
+      '  state.dream.disabled = false;') },
 ];
 
 const COPY = ['package.json', 'cli.mjs', 'README.md', 'CLAUDE.md', 'src', 'tests', 'scripts',

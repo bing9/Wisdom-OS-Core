@@ -35,6 +35,7 @@ The extension starts automatically. No server is required.
 - `/wos learn <id>` — outcome review and case-law disposition
 - `/wos precedent <case-id> <decision-id>` — record whether precedent changed the later call
 - `/wos improve <improvement-id>` — approve a semantic canary or disable the proposal
+- `/dream` — the continuous-improvement loop: last run, its bounds, and what is awaiting a call
 - `wisdom_os` — model tool for decisions, tasks, feedback, evidence, handoffs, and precedents
 
 Default state is private and project-keyed under `~/.wisdom-os/projects/`. Set
@@ -79,6 +80,13 @@ correction → recurring class → improvement proposal/task → regression test
 Mechanical, reversible improvements can enter the work queue automatically. Semantic policy changes
 require human approval. See `docs/CORE_CONTRACT.md` and `docs/PI_PACKAGE_DESIGN.md`.
 
+`extensions/wos-dream.ts` runs that loop continuously, on bounded triggers, after the turn has
+settled. It can **retire and refute**, not only add: a belief unused past its review date is proposed
+for retirement with the absence itself as the evidence, and a belief whose own falsifier fires is
+proposed for refutation. A loop that can only add makes its owner more self-consistent, never more
+correct. It proposes and never applies, it turns itself off if humans keep rejecting its output, and
+it never treats its own proposals as evidence. `/dream` shows its state.
+
 ## Direct CLI
 
 The CLI uses the same local state directly; it does not require HTTP:
@@ -106,6 +114,8 @@ src/safety.mjs             terminal-message predicate, append-don't-replace, kil
 src/gatelog.mjs            gate manifest, gate telemetry, real-vs-synthetic coverage
 src/guard-predicates.mjs   the shipped result-time predicates, importable by tests
 src/return-envelope.mjs    delegation return transaction: completeness, exactly-once, idle ≠ done
+src/dream.mjs              continuous-improvement loop: bounded triggers, add/amend/retire/refute
+extensions/wos-dream.ts    the loop's Pi adapter — runs on settle, never in the foreground
 scripts/release-check.mjs  the release gate, positive and negative
 cli.mjs                    direct state CLI
 archive/web-v0.1/          retained browser prototype; not shipped as the product interface

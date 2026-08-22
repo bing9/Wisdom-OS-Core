@@ -74,8 +74,8 @@ here, not three. Negative gate under v24: **11/11 mutations killed, exit 3**.
 
 | Item | Acceptance gap | Owner |
 |---|---|---|
-| `LANDED / PROVED / COST` improvement vocabulary | Core models the same governance as `canaryResult` + independent `verifier` + `autoDisable`, but does not carry the three-word ledger. Porting the vocabulary without its private measurement source would ship labels with nothing behind them. | A53-c9/c10 (scope addition, second commit) |
-| Continuous-improvement / dream loop as a Pi extension | Requested as a scope addition after this RC was cut. Deliberately **not** folded into this commit. | A53-c9/c10 |
+| ~~`LANDED / PROVED / COST` improvement vocabulary~~ | **Resolved in the A53-c9/c10 commit** — every proposal now carries `landing` / `proof` / `cost` and cannot apply without all three. | done |
+| ~~Continuous-improvement / dream loop as a Pi extension~~ | **Resolved in the A53-c9/c10 commit** — see the section below. | done |
 | Intent/goal projection: stable criteria IDs and versions, definition-of-done, review question, reviewer, transition history, one canonical outcome-derived projection, no-op on unchanged state | Core has no goal entity. The portable slice is the evidence-vs-lifecycle split, which **is** ported and gated; the projection layer needs a Core goal model first. | unassigned |
 | `/goal` stop behaviour — one honoured block, no claimed invocation-count bound | Depends on a host stop-hook contract Core does not define. Commit `90d0bb8` records that the banner claimed a bound the measurements refuted; porting the claim without the measurement would repeat that. | unassigned |
 | Ledger runaway containment (`ledger_guard.py`, rows/distinct redundancy + rate + size) | Genuinely generic and valuable. Core's journals are bounded by count only, which is a weaker control than volume-without-information detection. Needs its own gate and negative control. | unassigned |
@@ -106,7 +106,66 @@ Reported first, because they are the one thing a director cannot obtain another 
 - Node 20 and 22 remain CI-declared and locally unrun.
 - Gate telemetry ships with **zero live hits by construction** — the coverage report will read `never` for all three gates until the package runs somewhere real. That is the honest state, and `gateCoverage` reports it rather than counting installation as evidence.
 
-## Commit
+## A53-c9/c10 — the continuous-improvement loop (second commit)
 
-Recorded on completion of this sync; see `git log -1` in the Core checkout. No push, no npm publish,
-no tag, and no change to live private extension loading.
+Scope addition received after the RC was cut, and deliberately kept as a **separate commit** so the
+sync could be frozen and verified independently. RC SHA: `572d01b`.
+
+`src/dream.mjs` (kernel) + `extensions/wos-dream.ts` (adapter). Mechanism only — Core ships the loop,
+the private harness keeps the beliefs.
+
+| Requirement | How it is enforced | Provable by |
+|---|---|---|
+| Bounded session / time / correction-failure triggers | `shouldRun` — 20 turns, ≥60 min apart, 2 corrections, ≤8 runs/session, ≤3 proposals/run, 200-run journal. Every refusal states which bound held. | `dream-loop` |
+| Never blocks the foreground | Runs on `agent_settled` only when `ctx.isIdle()`, detached via `setTimeout(…, 0)`, wrapped `failOpen`; `session_start` does no IO at all | `dream-loop` (asserts the startup handler touches no store call) |
+| Coalesces duplicates | `coalesce` folds by `verb::subject`, unions evidence, strengthens an already-open proposal instead of opening a second | `dream-loop` |
+| Evidence-backed proposals, not self-approved policy | `canApply` requires landing, proof, cost, falsifier, rollback, auto-disable, and a verifier ≠ maker | `dream-governance` |
+| Semantic changes human-gated | An enforced gate, not a comment: `needsHumanApproval && !approvedByHuman` → cannot apply. Every belief-level proposal is semantic. | `dream-governance` |
+| Independent verification | `verifier` must differ from `maker`, checked in the same gate | `dream-governance` |
+| Auto-disable can fire | `qualityVerdict` disables the loop at a ≥60% human-rejection rate over its **own** proposals; the disabled flag survives `normalizeState` | `dream-governance` |
+
+### The scar tissue, ported
+
+1. **One-directional compounding (55 accepts, 0 retirements ever).** `retire` and `refute` are
+   first-class verbs with their own evidence paths — retirement earned by *absence of use* past a
+   review date, refutation by the belief's own falsifier being observed. The release check requires a
+   fixture that actually yields a retirement proposal; mutation `retirement-is-decorative` disables
+   that branch and must be killed. A verb no fixture can reach is decoration.
+2. **Detectors with zero callers.** Proposals are written into `state.improvements` — the collection
+   `computeButlerBrief` already surfaces — so `reachesHumanSurface` asserts end to end that an
+   emitted proposal appears in the brief a human opens. Mutation `proposal-never-surfaces` parks the
+   proposal off-surface and must be killed.
+3. **The coalescer matching its own output.** Everything the loop writes is stamped
+   `producedBy: 'dream'` and `selectEvents` excludes those rows across signals, events and cases. The
+   check uses a mixed fixture so the exclusion is observable — an all-foreign fixture cannot tell the
+   two implementations apart. Mutation `coalescer-eats-own-output` removes the filter and must be
+   killed.
+
+**A defect this found in the gate itself:** the first version of the scar-3 check asserted against a
+state containing nothing the loop had produced, so it passed under both the correct and the broken
+filter. The mutation survived and named the wrong owning check. Fixed by making the fixture mixed —
+the same class of error as the self-satisfying envelope check above, found the same way.
+
+### A53-c9/c10 verification
+
+Positive **14/14, exit 0** and negative **17/17 mutations killed, exit 3**, under *both*
+`/usr/bin/node` v16.20.2 and the bundled v24.10.0. Six of the seventeen mutations target this loop.
+
+### What the loop still cannot do
+
+- It proposes; it never applies. Application remains `/wos improve` plus the existing
+  canary → independent verifier → live path.
+- It has **no live hits by construction** on a fresh install. `gateCoverage` and the run journal will
+  both read empty until it runs somewhere real. That is the honest state, not a pass.
+- `add` proposals are only as good as the correction classes a human or the guards name; the loop
+  invents no classes of its own.
+
+## Commits
+
+| SHA | Contents |
+|---|---|
+| `572d01b` | the sync RC — ported mechanisms, five corrections, the 12-check release gate |
+| second commit | A53-c9/c10 — the continuous-improvement loop, checks 13 and 14, six further mutations |
+
+No push, no npm publish, no tag, and no change to live private extension loading. A53 moves to
+`READY FOR REVIEW` only.

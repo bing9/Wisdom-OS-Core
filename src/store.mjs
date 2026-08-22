@@ -18,6 +18,8 @@ export const emptyState = () => ({
   events: [],
   processSignals: [],
   improvements: [],
+  // The continuous-improvement loop's own bounded journal and kill state (A53-c9/c10).
+  dream: { runs: [], disabled: false, disabledReason: '', cursor: { turns: 0, lastRunAt: '', runsThisSession: 0 } },
 });
 
 const ARRAY_KEYS = [
@@ -29,6 +31,13 @@ export function normalizeState(input = {}) {
   const state = { ...emptyState(), ...input, version: 2 };
   for (const key of ARRAY_KEYS) if (!Array.isArray(state[key])) state[key] = [];
   if (!Number.isInteger(state.revision)) state.revision = 0;
+  const blank = emptyState().dream;
+  const dream = state.dream && typeof state.dream === 'object' ? state.dream : blank;
+  state.dream = { ...blank, ...dream, cursor: { ...blank.cursor, ...(dream.cursor ?? {}) } };
+  // A disabled loop stays disabled across restarts. An auto-disable that a reload clears is not a
+  // kill switch, it is a pause.
+  if (!Array.isArray(state.dream.runs)) state.dream.runs = [];
+  state.dream.disabled = state.dream.disabled === true;
   return state;
 }
 
