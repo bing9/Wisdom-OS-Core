@@ -20,11 +20,17 @@ Two Node majors are reachable on the maintainer's host and they disagree about w
 
 | Runtime | `execPath` | Version | Positive gate | Unit summary |
 |---|---|---|---|---|
-| system | `/usr/bin/node` | v16.20.2 | 12 passed · 0 failed · exit 0 | `8 pass / 0 fail of 8` — counts **files** |
-| bundled | dotslash-managed Node 24 | v24.10.0 | 12 passed · 0 failed · exit 0 | `40 pass / 0 fail of 40` — counts **subtests** |
+| system | `/usr/bin/node` | v16.20.2 | 15 passed · 0 failed · exit 0 | `9 pass / 0 fail of 9` — counts **files** |
+| bundled | dotslash-managed Node 24 | v24.10.0 | 15 passed · 0 failed · exit 0 | `55 pass / 0 fail of 55` — counts **subtests** |
 
 `/usr/local/bin/node` and `/usr/bin/node` resolve to the same v16 binary; there are two runtimes
-here, not three. Negative gate under v24: **11/11 mutations killed, exit 3**.
+here, not three. Negative gate: **20/20 mutations killed, exit 3**, under both.
+
+> **Counts corrected 2026-08-22.** This table first read `12 passed` and `40 pass`. Both were true
+> when written and stale by the time they were read: I recorded the number, then added tests and
+> checks, and did not re-measure. An independent verifier caught the drift (`41/41` at the frozen
+> SHA). The numbers above are re-measured at the repair commit, and the row now says which runtime
+> produced each. [[feedback-artifact-is-only-as-fresh-as-its-producer]]
 
 **Honesty clause: Node 20 and 22 are declared in CI only. Neither has been run locally.** Direct
 `npm` install is blocked on this host by policy and was not worked around.
@@ -33,17 +39,35 @@ here, not three. Negative gate under v24: **11/11 mutations killed, exit 3**.
 
 ### PORTED
 
+🔴 **Two of the four private sources are not under version control**, so half these rows cannot cite
+a commit and inventing one would be a fabrication. The live Pi extension directory is not a
+repository; the private code repo tracks only the two symlinked extensions. Provenance for the
+untracked pair is therefore size + mtime + content hash, captured at sync time. (Absolute private
+paths are deliberately not written into this package; they are in the producer's report.)
+
+| Private source | Tracked? | Size | mtime | sha256 (12) |
+|---|---|---|---|---|
+| `wos-guards.ts` (live extension dir) | **no — not a repo** | 37,704 B | 2026-08-20 04:59:31 | `7b669247d796` |
+| `wos-butler.ts` (live extension dir) | **no — not a repo** | 11,526 B | 2026-08-19 02:17:04 | `3fb16e925655` |
+| `wos-lane.ts` (private code repo) | yes | 69,088 B | 2026-08-21 02:16:26 | `603995b671e6` |
+| `wos-return.ts` (private code repo) | yes | 5,996 B | 2026-08-21 06:42:33 | `882e4a0c78f6` |
+
+The only commit that ever captures the untracked pair is a periodic auto-snapshot (`8f4c32f`,
+2026-08-20T03:40:01Z), which **predates the current `wos-guards.ts` mtime** — so even that snapshot
+does not contain the version this sync read. **This is a finding for the private harness, not a Core
+issue:** 49 KB of incident-paid live extension logic has no version history.
+
 | Mechanism | Public home | Private source | Test handle |
 |---|---|---|---|
-| Terminal-message safety — a guard may append only to an assistant message carrying no tool-call block | `src/safety.mjs` `isTerminalMessage` / `mayAppendTo` | `wos-guards.ts` `message_end`; incident 2026-08-19 (appending mid-flight produced a provider rejection for assistant prefill and cost a turn) | `tests/safety.test.mjs`; gate check `guard-fixtures` |
-| Append-don't-replace note attachment across all three content shapes | `src/safety.mjs` `appendNote` | same | `tests/safety.test.mjs` |
-| One-file kill switch + fail-open wrapper: a control must never propagate its own failure into the turn | `src/safety.mjs` `killSwitch` / `failOpen`, wired into all three passive butler hooks and the guards handler | `wos-butler.ts` / `wos-guards.ts` `off()` sentinels | `tests/safety.test.mjs`; gate check `read-only-zero-bytes` |
-| Gate manifest that never re-dates an existing gate, and retires rather than drops | `src/gatelog.mjs` `gateManifest` / `writeManifest` | `wos-guards.ts` `writeManifest` | `tests/gatelog.test.mjs` |
-| Gate telemetry carrying real-vs-synthetic provenance, so "installed" and "working" cannot share a word | `src/gatelog.mjs` `gateEvent` / `logGate` / `gateCoverage` | `wos-guards.ts` `logGate` (`caught_by`, `synthetic`) | `tests/gatelog.test.mjs`; gate check `guard-fixtures` |
-| Result-time predicates extracted so tests import the shipped implementation | `src/guard-predicates.mjs` | `wos-guards.ts` `__predicates` | `tests/guard-predicates.test.mjs` |
-| Delegation return transaction **contract**: envelope completeness, verifier independence, exact-session binding, exactly-once delivery, idle ≠ completion, declared missing-report recovery | `src/return-envelope.mjs` | `wos-return.ts` + `fleet/return_channel.py`; commits `4fcea78`, `ad88333`, `10bb491`, `f194de7`, `220b64f`, `23f2676`, `c67eb8e`, `b311d81`, `14fe195` | `tests/return-envelope.test.mjs`; gate check `return-envelope` |
-| Evidence separated from lifecycle — passing evidence is not DONE | already in `src/domain.mjs`; now **pinned by the gate** | commits `f6a8a21`, `8ccc9aa` (the A39 P0) | gate check `lifecycle-gates` |
-| The release gate itself: check-don't-grep, negative control that must kill | `scripts/release-check.mjs` | commits `0c17b3f`, `7d98fd8`, `83e056a`, `d01286c` (a gate that cannot fail; a negative control that is the true inverse) | `--negative`, 11 mutations |
+| Terminal-message safety — a guard may append only to an assistant message carrying no tool-call block | `src/safety.mjs` `guardedMessageRewrite` / `isTerminalMessage` / `mayAppendTo` | `wos-guards.ts` `message_end` (untracked, sha `7b669247d796`, lines 566–642); incident 2026-08-19 — appending mid-flight produced a provider rejection for assistant prefill and cost a turn | `tests/safety.test.mjs`; gate check **`terminal-message-safety`**; mutations `unsafe-message-end-writer`, `sanctioned-rewrite-stops-refusing` |
+| Append-don't-replace note attachment across every content shape | `src/safety.mjs` `appendNote` / `textOf` | same file, sha `7b669247d796` | `tests/safety.test.mjs` ("a single-block object keeps its original content") |
+| One-file kill switch + fail-open wrapper: a control must never propagate its own failure into the turn | `src/safety.mjs` `killSwitch` / `failOpen`, wired into all three passive butler hooks and the guards handler | `wos-butler.ts` `off()` (sha `3fb16e925655`, lines 51–58) and `wos-guards.ts` `off()` (sha `7b669247d796`, line 137) | `tests/safety.test.mjs`; gate check `read-only-zero-bytes` |
+| Gate manifest that never re-dates an existing gate, and retires rather than drops | `src/gatelog.mjs` `gateManifest` / `writeManifest` | `wos-guards.ts` `writeManifest` (sha `7b669247d796`, lines 96–113) | `tests/gatelog.test.mjs` |
+| Gate telemetry carrying real-vs-synthetic provenance, so "installed" and "working" cannot share a word | `src/gatelog.mjs` `gateEvent` / `logGate` / `gateCoverage` | `wos-guards.ts` `logGate` — `caught_by`, `synthetic` (sha `7b669247d796`, lines 115–136) | `tests/gatelog.test.mjs`; gate check `guard-fixtures` |
+| Result-time predicates extracted so tests import the shipped implementation | `src/guard-predicates.mjs` | `wos-guards.ts` `__predicates` (sha `7b669247d796`, lines 149–186, 684+) | `tests/guard-predicates.test.mjs`; gate check `guard-fixtures` |
+| Delegation return transaction **contract**: envelope completeness, verifier independence, exact-session binding, exactly-once delivery, idle ≠ completion, declared missing-report recovery | `src/return-envelope.mjs` | `pi_extensions/wos-return.ts` + `fleet/return_channel.py`; commits `4fcea78`, `ad88333`, `10bb491`, `f194de7`, `220b64f`, `23f2676`, `c67eb8e`, `b311d81`, `14fe195` | `tests/return-envelope.test.mjs`; gate check `return-envelope`; mutation `envelope-drops-verifier` |
+| Evidence separated from lifecycle — passing evidence is not DONE | already in `src/domain.mjs`; now **pinned by the gate** | commits `f6a8a21`, `8ccc9aa` (the A39 P0) | gate check `lifecycle-gates`; mutation `done-without-human` |
+| The release gate itself: check-don't-grep, negative control that must kill | `scripts/release-check.mjs` | commits `0c17b3f`, `7d98fd8`, `83e056a`, `d01286c` | `--negative`, 20 mutations |
 
 ### ALREADY-COVERED
 
@@ -78,6 +102,7 @@ here, not three. Negative gate under v24: **11/11 mutations killed, exit 3**.
 | ~~Continuous-improvement / dream loop as a Pi extension~~ | **Resolved in the A53-c9/c10 commit** — see the section below. | done |
 | Intent/goal projection: stable criteria IDs and versions, definition-of-done, review question, reviewer, transition history, one canonical outcome-derived projection, no-op on unchanged state | Core has no goal entity. The portable slice is the evidence-vs-lifecycle split, which **is** ported and gated; the projection layer needs a Core goal model first. | unassigned |
 | `/goal` stop behaviour — one honoured block, no claimed invocation-count bound | Depends on a host stop-hook contract Core does not define. Commit `90d0bb8` records that the banner claimed a bound the measurements refuted; porting the claim without the measurement would repeat that. | unassigned |
+| **Unproven-claim gate** — contradict a claim about the harness at the moment it is made, using a three-tier evidence ladder where **LIVE > REPLAY > SYNTHETIC and the tiers are not interchangeable** (`wos-guards.ts` sha `7b669247d796`, lines 443–560; gate E) | Core has **two of the three tiers**: `gateCoverage` reports `live` / `synthetic-only` / `never`. The missing tier is **REPLAY** ("the path is real and the gate is waiting"), which needs a corpus of real historical bodies Core does not ship. The gate's *prose* predicate — a verification verb plus a harness noun in the same tail — is explicitly **not safe to port**: its own header records that cry-wolf firing "has now killed three gates in this file", and it once claimed "no REAL hit" for three gates a replay run had just proven. Acceptance gap: a replay corpus, plus a predicate with a false-positive control that can be shown to stay quiet on healthy prose. | unassigned |
 | Ledger runaway containment (`ledger_guard.py`, rows/distinct redundancy + rate + size) | Genuinely generic and valuable. Core's journals are bounded by count only, which is a weaker control than volume-without-information detection. Needs its own gate and negative control. | unassigned |
 | Mutual-recursion / fork-bomb re-entry guard (commit `c97a283`) | Core has no multi-process entrypoints today, so a guard here could not fail and would not be a gate. Revisit when Core grows a background path. | unassigned |
 
@@ -160,12 +185,33 @@ Positive **14/14, exit 0** and negative **17/17 mutations killed, exit 3**, unde
 - `add` proposals are only as good as the correction classes a human or the guards name; the loop
   invents no classes of its own.
 
+## Independent verification round 1 — FAIL on `572d01b`, and the repair
+
+`wos-core-sync-verifier` (codex, separate clone of the frozen SHA) returned **FAIL** at
+2026-08-22T09:10:42Z. Four of its six findings were real defects in this work. All four are repaired
+**by strengthening the gate** — no mutation deleted, no tolerance loosened, no required check
+downgraded.
+
+| Finding | Verdict | Repair |
+|---|---|---|
+| `terminal-safety-gate-bypass` (release-blocking) — the final extension still has no `message_end` handler and release-check contained **no enforcement at all**; an unconditional unsafe writer was accepted 12/12 under both runtimes | **Confirmed.** I diagnosed a claim-without-enforcement defect and shipped a claim-without-enforcement fix. Two headers asserted a check that was never written. | New check **`terminal-message-safety`** with three independent grounds (registers `message_end`, spreads `event.message`, reads `event.message.content`) plus a runtime assertion that the sanctioned path refuses a mid-flight message. New `guardedMessageRewrite` is the one permitted path. The verifier's **exact patch is now a permanent mutation fixture** (`unsafe-message-end-writer`), joined by `sanctioned-rewrite-stops-refusing`. |
+| `required-pi-check-skips-green` (release-blocking) — `PATH=/usr/bin:/bin` made the gate exit 0 with `pi-load` never run | **Confirmed.** The gate printed "A skipped check is NOT a passed check" and then exited 0 — a warning wearing a gate's clothes. | Checks carry `required`. A skipped required check is now a **failure**. Waiving is explicit and per-check (`WISDOM_OS_RELEASE_ALLOW_SKIP=pi-load`), and a waived run prints `NOT RELEASE-GRADE`. Mutation `required-check-skips-green` forces the real skip path; the verifier's exact repro now exits 1. |
+| `append-note-drops-object-evidence` | **Confirmed.** `textOf` returned `''` for a lone block, so `{type:'text',text:'original'}` lost its original while the note survived. | The object is carried through **verbatim** instead of rendered; `textOf` reads a single block. My earlier test used `{unexpected:true}` — a shape with no text to lose — so it could not fail. Replaced with a fixture that carries text. |
+| `inventory-incomplete` | **Confirmed.** Only 3/9 PORTED rows cited a commit, and the private unproven-claim gate was unclassified. | Provenance table added above. **Two of the four private sources are not in any repository**, so those rows now cite path + size + mtime + sha256 rather than a fabricated hash — and that absence is itself reported to DIR-wos. The unproven-claim gate is classified **DEFERRED** with its named gap (Core has 2 of its 3 evidence tiers; REPLAY is missing). |
+| `runtime-count-stale` | **Confirmed.** Recorded 40/40, frozen SHA reported 41/41. | Re-measured at the repair commit; the correction is noted in place rather than silently overwritten. |
+| `external-publish-state` | Verification limit, not a defect. | No action. Confirms no push, no tag, no publish. |
+
+**Rail consequence: live private `wos-lane` integration remains FORBIDDEN.** It was authorised only
+after a correlated **PASS**; this was a FAIL. Live extension loading is untouched, and A53-c11..c13
+is not started.
+
 ## Commits
 
 | SHA | Contents |
 |---|---|
 | `572d01b` | the sync RC — ported mechanisms, five corrections, the 12-check release gate |
-| second commit | A53-c9/c10 — the continuous-improvement loop, checks 13 and 14, six further mutations |
+| `539782d` | A53-c9/c10 — the continuous-improvement loop, checks 13/14, six further mutations |
+| repair commit | verifier round-1 repairs — check 15 `terminal-message-safety`, required-check enforcement, `appendNote` fix, inventory and count corrections, three further mutations |
 
-No push, no npm publish, no tag, and no change to live private extension loading. A53 moves to
-`READY FOR REVIEW` only.
+15 checks · 20 mutations. No push, no npm publish, no tag, and no change to live private extension
+loading. A53 moves to `READY FOR REVIEW` only.

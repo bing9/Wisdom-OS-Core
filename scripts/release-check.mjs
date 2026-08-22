@@ -209,6 +209,58 @@ const CHECKS = [
     },
   },
   {
+    // Added 2026-08-22 after an independent verifier landed an unconditional unsafe `message_end`
+    // writer and the gate accepted it 12/12 under both runtimes. The previous commit CLAIMED this
+    // enforcement in two file headers and never implemented it — a claim-without-enforcement fix
+    // for a claim-without-enforcement defect. This is the enforcement.
+    id: 'terminal-message-safety',
+    title: 'no extension rewrites an assistant message without the terminal-message predicate',
+    async run() {
+      const safety = await import(join(ROOT, 'src/safety.mjs'));
+
+      // 1. The predicate itself must refuse a mid-flight message.
+      const midFlight = { message: { role: 'assistant', content: [{ type: 'text', text: 'x' }, { type: 'toolCall', id: 't' }] } };
+      assert(safety.guardedMessageRewrite(midFlight, '\nNOTE') === undefined,
+        'the sanctioned rewrite must refuse a message carrying a tool call');
+      assert(safety.guardedMessageRewrite({ message: { role: 'user', content: [] } }, '\nNOTE') === undefined,
+        'only assistant messages may be rewritten');
+      const terminal = { message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } };
+      const rewritten = safety.guardedMessageRewrite(terminal, '\nNOTE');
+      assert(rewritten?.message?.content?.length === 2 && rewritten.message.content[0].text === 'done',
+        'a terminal message must be appended to, with the original preserved');
+
+      // 2. No extension may reach `event.message` outside that path. Three independent grounds, so
+      //    a writer has to defeat all three: registering the hook, spreading the message, or
+      //    reading its content back into a return.
+      const files = (await readdir(join(ROOT, 'extensions'))).filter((name) => /\.(ts|mjs)$/.test(name));
+      assert(files.length > 0, 'no extensions found to audit');
+      const SANCTIONED = /guardedMessageRewrite\s*\(|mayAppendTo\s*\(|isTerminalMessage\s*\(/;
+      const offences = [];
+      for (const name of files) {
+        const body = await read(join('extensions', name));
+        const guarded = SANCTIONED.test(body);
+        if (/pi\.on\(\s*["'`]message_end["'`]/.test(body) && !guarded) {
+          offences.push(`${name}: registers message_end without the terminal-message predicate`);
+        }
+        for (const [, snippet] of [...body.matchAll(/(\.\.\.\s*event\.message\b[^\n]*)/g)]) {
+          if (!guarded) offences.push(`${name}: spreads event.message unguarded — ${snippet.trim().slice(0, 60)}`);
+        }
+        for (const [, snippet] of [...body.matchAll(/(event\.message\.content[^\n]*)/g)]) {
+          if (!guarded) offences.push(`${name}: reads event.message.content unguarded — ${snippet.trim().slice(0, 60)}`);
+        }
+      }
+      assert(offences.length === 0,
+        `an assistant message is rewritten without the terminal-message predicate:\n  ${[...new Set(offences)].join('\n  ')}`);
+
+      // 3. The headers that make the claim must name the enforcement, so the two cannot drift apart
+      //    again without this check noticing.
+      const guardsHeader = await read('extensions/wos-guards.ts');
+      assert(/release-check/.test(guardsHeader) && /safety\.mjs/.test(guardsHeader),
+        'the file claiming terminal-message safety must name where it is enforced');
+      return ok(`${files.length} extensions audited · sanctioned path refuses mid-flight · 3 independent grounds`);
+    },
+  },
+  {
     id: 'read-only-zero-bytes',
     title: 'read-only mode writes zero bytes',
     async run() {
@@ -404,6 +456,7 @@ const CHECKS = [
     id: 'pi-load',
     title: 'the package loads under `pi -e .` in non-TUI mode',
     skipInChild: true,
+    required: true,
     async run() {
       const result = await run('pi', ['-e', '.', '--list-models'], { env: { ...process.env, PI_OFFLINE: '1' } });
       if (result.code === 127) return { skipped: true, ok: true, detail: 'pi is not on PATH in this environment — NOT verified here' };
@@ -606,6 +659,27 @@ const MUTATIONS = [
   { id: 'ci-drops-node-20', catches: 'ci-matrix', file: '.github/workflows/ci.yml',
     apply: (body) => body.replace(/node-version:.*/, 'node-version: 22') },
 
+  // The independent verifier's EXACT surviving patch, 2026-08-22, kept verbatim. It accepted this
+  // 12/12 under both runtimes. If this mutation ever survives again, the enforcement is gone.
+  { id: 'unsafe-message-end-writer', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  pi.on("message_end", async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe verifier mutation" }] },
+  }));`) },
+  // The sanctioned path must also be the only one that works: neuter it and the gate must notice.
+  { id: 'sanctioned-rewrite-stops-refusing', catches: 'terminal-message-safety', file: 'src/safety.mjs',
+    apply: (body) => body.replace('  if (!note || !mayAppendTo(message)) return undefined;',
+      '  if (!note) return undefined;') },
+  // A required check that skips must FAIL. Forces the real skip path on the real required check by
+  // removing its child waiver and making it unresolvable — the verifier's `PATH=/usr/bin:/bin`
+  // repro, expressed as a mutation so it can never regress silently.
+  { id: 'required-check-skips-green', catches: 'pi-load', file: 'scripts/release-check.mjs',
+    apply: (body) => body.replace("    skipInChild: true,\n    required: true,", '    required: true,')
+      .replace("      const result = await run('pi', ['-e', '.', '--list-models']",
+        "      const result = await run('pi-does-not-exist', ['-e', '.', '--list-models']") },
+
   // A53-c9/c10. Each targets one of the three failure modes the private loop already exhibited.
   { id: 'retirement-is-decorative', catches: 'dream-loop', file: 'src/dream.mjs',
     apply: (body) => body.replace("      if (!used) {", '      if (false) {') },
@@ -687,11 +761,20 @@ if (NEGATIVE) {
   process.exit(3);
 }
 
-let failures = 0, skipped = 0;
+// A REQUIRED check that does not run is a FAILURE, not a note. Until 2026-08-22 this gate printed
+// "A skipped check is NOT a passed check" and then exited 0 anyway — `PATH=/usr/bin:/bin` made
+// `pi -e .` unresolvable and the release gate went green with a load-bearing check never executed.
+// An independent verifier found it. Skipping is now opt-in, explicit, per-check, and it forfeits
+// release grade even when granted.
+const WAIVED = new Set(String(process.env.WISDOM_OS_RELEASE_ALLOW_SKIP ?? '')
+  .split(',').map((entry) => entry.trim()).filter(Boolean));
+
+let failures = 0, skipped = 0, waived = 0;
 for (const check of CHECKS) {
+  const waivable = WAIVED.has(check.id) || (CHILD && check.skipInChild);
   if (CHILD && check.skipInChild) {
-    console.log(`SKIP ${check.id.padEnd(26)} ${check.title} (child run)`);
-    skipped += 1;
+    console.log(`SKIP ${check.id.padEnd(26)} ${check.title} (child run — mutation detection only)`);
+    skipped += 1; waived += 1;
     continue;
   }
   let result;
@@ -702,7 +785,15 @@ for (const check of CHECKS) {
   }
   if (result.skipped) {
     skipped += 1;
-    console.log(`SKIP ${check.id.padEnd(26)} ${result.detail}`);
+    if (check.required && !waivable) {
+      failures += 1;
+      console.log(`FAIL:${check.id} REQUIRED check did not run — ${result.detail}`);
+      console.log('     A required check that skips is a failure. Waive it explicitly with '
+        + `WISDOM_OS_RELEASE_ALLOW_SKIP=${check.id} and the run forfeits release grade.`);
+    } else {
+      if (waivable) waived += 1;
+      console.log(`SKIP ${check.id.padEnd(26)} ${result.detail}${waivable ? ' [WAIVED]' : ''}`);
+    }
   } else if (result.ok) {
     console.log(`PASS ${check.id.padEnd(26)} ${result.detail}`);
   } else {
@@ -716,4 +807,8 @@ console.log('');
 console.log(`${CHECKS.length - failures - skipped} passed · ${failures} failed · ${skipped} skipped `
   + `· under ${process.execPath} ${process.version}`);
 if (skipped) console.log('A skipped check is NOT a passed check. It is named above.');
+if (waived && !failures) {
+  console.log('');
+  console.log('🔴 NOT RELEASE-GRADE — a required check was waived, so this green does not authorise a release.');
+}
 process.exit(failures ? 1 : 0);

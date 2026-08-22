@@ -33,20 +33,46 @@ export function mayAppendTo(message) {
 }
 
 /**
- * Attach a note WITHOUT replacing the original content, across all three shapes Pi produces.
+ * Attach a note WITHOUT replacing the original content, across every shape Pi produces.
  * Replacing evidence is how a guard destroys the thing it was reading.
+ *
+ * The single-block object shape used to be stringified through `textOf`, which returns '' for a
+ * lone block — so the original was silently dropped while the note survived. An independent
+ * verifier found it on 2026-08-22 by passing `{type:'text',text:'original'}`; the test that should
+ * have caught it used `{unexpected:true}`, a shape with no text to lose. The object is now carried
+ * through verbatim rather than rendered.
  */
 export function appendNote(content, note) {
   if (!note) return content;
   if (Array.isArray(content)) return [...content, { type: 'text', text: note }];
   if (typeof content === 'string') return content + note;
-  return [{ type: 'text', text: `${textOf(content)}${note}` }];
+  if (content === null || content === undefined) return [{ type: 'text', text: note }];
+  return [content, { type: 'text', text: note }];
 }
 
 export function textOf(content) {
   if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.map((part) => typeof part?.text === 'string' ? part.text : '').join('\n');
+  if (Array.isArray(content)) return content.map((part) => typeof part?.text === 'string' ? part.text : '').join('\n');
+  if (content && typeof content === 'object' && typeof content.text === 'string') return content.text;
+  return '';
+}
+
+/**
+ * THE ONE SANCTIONED PATH for rewriting an assistant message from a `message_end` handler.
+ *
+ * Returns `undefined` — Pi's "leave it alone" — whenever the message is not terminal, not from the
+ * assistant, or there is nothing to add. Handlers must route through this rather than spreading
+ * `event.message` themselves: `scripts/release-check.mjs` refuses any extension that touches
+ * `event.message` without it, and that refusal is mutation-tested.
+ *
+ * Source: private `wos-guards.ts`; incident 2026-08-19, where a gate appended to a message carrying
+ * a tool call, the conversation ended on an assistant turn, and the next request was rejected for
+ * assistant prefill. The gate cost the turn it existed to protect.
+ */
+export function guardedMessageRewrite(event, note) {
+  const message = event?.message;
+  if (!note || !mayAppendTo(message)) return undefined;
+  return { message: { ...message, content: appendNote(message.content, note) } };
 }
 
 /**

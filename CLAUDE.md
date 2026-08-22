@@ -32,8 +32,10 @@ Hard gates:
 - Never ship a harness control without a regression test, rollback, quality auto-disable, canary result, and independent verifier. Semantic controls also require human approval.
 - Never bypass a failed transition gate by editing JSON directly.
 - Surface at most three items needing human judgment.
-- Never append to a non-terminal assistant message. Use `mayAppendTo` from `src/safety.mjs`; a guard
-  that ends a turn on an assistant message costs more than every error it will ever catch.
+- Never append to a non-terminal assistant message. Rewrite one only through
+  `guardedMessageRewrite` in `src/safety.mjs`; a guard that ends a turn on an assistant message
+  costs more than every error it will ever catch. The `terminal-message-safety` check enforces this
+  and is mutation-tested — touching `event.message` any other way fails the release gate.
 - Never describe a control as working on the strength of a synthetic hit. `src/gatelog.mjs` reports
   `synthetic-only` separately for exactly this reason.
 

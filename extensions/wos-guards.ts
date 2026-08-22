@@ -4,11 +4,17 @@
 // provenance. Stripped: private incidents, paths, authority registry, personal mirror, and
 // voice/length policy.
 //
-// TERMINAL-MESSAGE SAFETY (corrected 2026-08-22): this file previously claimed to preserve it and
-// did not — it registers no `message_end` handler, so there was nothing to protect. The predicate
-// itself is now shipped in `../src/safety.mjs` (`mayAppendTo` / `isTerminalMessage`) and
-// `scripts/release-check.mjs` fails any extension that rewrites an assistant message without it.
-// The private incident that paid for the predicate is recorded in that module's header.
+// TERMINAL-MESSAGE SAFETY. This file registers no `message_end` handler, so it rewrites no
+// assistant message. The predicate lives in `../src/safety.mjs` (`guardedMessageRewrite`, the one
+// sanctioned path, plus `mayAppendTo` / `isTerminalMessage`), and the `terminal-message-safety`
+// check in `scripts/release-check.mjs` refuses any extension that touches `event.message` without
+// it — mutation-tested, so the claim cannot drift from the enforcement again.
+//
+// It drifted twice. The original header claimed this protection with no handler and no check. The
+// 2026-08-22 correction named an enforcement that was never written, and an independent verifier
+// landed an unconditional unsafe writer that the gate accepted 12/12 under both runtimes. A
+// claim-without-enforcement fix for a claim-without-enforcement defect. The check exists now, and
+// the verifier's exact patch is a permanent mutation fixture.
 // @ts-nocheck
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

@@ -126,9 +126,12 @@ archive/web-v0.1/          retained browser prototype; not shipped as the produc
 One command is the gate, and it has two jaws:
 
 ```bash
-node scripts/release-check.mjs             # 12 checks — must exit 0
-node scripts/release-check.mjs --negative  # mutation test — must exit 3
+node scripts/release-check.mjs             # 15 checks — must exit 0
+node scripts/release-check.mjs --negative  # 20 mutations — must exit 3
 ```
+
+A **required** check that does not run is a failure, not a note. Waiving one is explicit
+(`WISDOM_OS_RELEASE_ALLOW_SKIP=pi-load`) and the run then prints `NOT RELEASE-GRADE`.
 
 `--negative` copies the tree, breaks one load-bearing condition at a time, and requires the normal
 gate to reject each one *by the check that owns it*. Exit 3 means every mutation was killed; exit 0
@@ -136,7 +139,7 @@ would be indistinguishable from having tested nothing. A gate that cannot fail i
 
 Every run prints its own `process.execPath` and `process.version` first. This is not decoration:
 Node 16 counts test **files** where Node 24 counts **subtests**, so the same green suite reports
-`8 pass` under one runtime and `40 pass` under another. A pass count without its runtime is not
+`9 pass` under one runtime and `55 pass` under another. A pass count without its runtime is not
 reproducible.
 
 ## Status
