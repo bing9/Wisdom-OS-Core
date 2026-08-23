@@ -95,6 +95,31 @@ default.
 
 Backlog/context is source code; orchestration is compiled runtime.
 
+### 8.1 Extension registration grammar
+
+**Every Pi event registration in a packaged extension is a direct dotted call on the ExtensionAPI
+binding with a plain string-literal event name:** `pi.on("event_name", handler)`.
+
+This is the single form Pi's own extension documentation uses, and it is normative here for one
+reason: **policy that applies to a specific event can only be enforced if the event name is readable
+at audit time.** Four rules make it checkable, and each rejects more than it strictly must:
+
+| Rule | Statement |
+|---|---|
+| G1 | the registration surface is direct dotted `.on(` on the ExtensionAPI binding — never `pi["on"]`, never `.on(` on any other receiver |
+| G2 | the ExtensionAPI binding never escapes — no alias, no destructure, no index, not passed on or returned |
+| G3 | the event name is one quoted string literal, or a backtick template with no substitution — never computed |
+| G4 | only then does event-specific policy apply; `message_end` must directly return `guardedMessageRewrite(event, inertNote)` from `src/safety.mjs` |
+
+**An event name the audit cannot read is refused, not skipped.** The prior gate skipped it: at
+`22e4efd` a handler registered as `pi["on"]("message_" + "end", …)` was reported as *zero handlers*
+and the release gate passed with an unconditional assistant-message rewriter installed. Silence on
+the unreadable is the failure mode this clause exists to remove.
+
+Enforced by `src/registration-grammar.mjs`, applied repository-wide by the `terminal-message-safety`
+check in `scripts/release-check.mjs`, and re-runnable on any tree by `scripts/extension-audit.mjs`.
+One grammar, one implementation — a second copy of a rule is how enforcement drifts from the claim.
+
 ## 9. Capture is automatic; semantic promotion is governed
 
 The Pi adapter automatically preserves human turns, touched artifacts, failed tools, and completion

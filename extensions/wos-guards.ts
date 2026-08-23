@@ -15,6 +15,14 @@
 // landed an unconditional unsafe writer that the gate accepted 12/12 under both runtimes. A
 // claim-without-enforcement fix for a claim-without-enforcement defect. The check exists now, and
 // the verifier's exact patch is a permanent mutation fixture.
+//
+// It then drifted a third time, differently: the enforcement was real but it read VOCABULARY.
+// `pi["on"]("message_" + "end", unsafe)` contains neither the scanned call token nor a
+// `message_end` literal, so the audit reported ZERO handlers and the gate passed 14/14 (WOSC-221).
+// Registrations are now judged by a grammar, not by spelling: every registration in this package is
+// a direct dotted `pi.on("literal", handler)`, the binding may not be aliased or indexed, and an
+// event name the audit cannot read is a FINDING rather than a silence. See `docs/CORE_CONTRACT.md`
+// §8.1, `src/registration-grammar.mjs`, and the standalone `scripts/extension-audit.mjs`.
 // @ts-nocheck
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

@@ -8,6 +8,7 @@
     "start": "pi -e .",
     "test": "node --test tests/*.test.mjs",
     "audit:portable": "node scripts/portability-audit.mjs",
+    "audit:extensions": "node scripts/extension-audit.mjs",
     "release-check": "node scripts/release-check.mjs",
     "release-check:negative": "node scripts/release-check.mjs --negative",
     "check": "node scripts/release-check.mjs"
@@ -19,6 +20,7 @@
     "src",
     "scripts/portability-audit.mjs",
     "scripts/release-check.mjs",
+    "scripts/extension-audit.mjs",
     "cli.mjs",
     "data/board.example.json",
     "docs"

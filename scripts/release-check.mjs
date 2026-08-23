@@ -22,6 +22,10 @@ import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// ONE grammar, imported — never restated here. WOSC-221: the gate and `scripts/extension-audit.mjs`
+// must be unable to disagree about what a legal Pi registration is.
+import { auditExtensionSource, auditExtensionSources, directGuardedMessageRewrite, formatFinding, RULES }
+  from '../src/registration-grammar.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const argv = process.argv.slice(2);
@@ -45,126 +49,6 @@ function run(command, args, options = {}) {
 const ok = (detail) => ({ ok: true, detail });
 const bad = (detail) => ({ ok: false, detail });
 function assert(condition, message) { if (!condition) throw new Error(message); }
-
-// Keep indexes stable while removing comments and, optionally, strings. The terminal-message audit
-// needs code structure, not vocabulary: a helper name in prose must never license a handler.
-function lexicalMask(source, maskStrings = true) {
-  const out = [...source];
-  let state = 'code';
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i], next = source[i + 1];
-    if (state === 'line-comment') {
-      if (char === '\n') state = 'code';
-      else out[i] = ' ';
-    } else if (state === 'block-comment') {
-      out[i] = char === '\n' ? '\n' : ' ';
-      if (char === '*' && next === '/') { out[i + 1] = ' '; i += 1; state = 'code'; }
-    } else if (state === 'single' || state === 'double' || state === 'template') {
-      if (maskStrings) out[i] = char === '\n' ? '\n' : ' ';
-      if (char === '\\') {
-        if (maskStrings && i + 1 < source.length) out[i + 1] = source[i + 1] === '\n' ? '\n' : ' ';
-        i += 1;
-      } else if ((state === 'single' && char === "'") || (state === 'double' && char === '"')
-        || (state === 'template' && char === '`')) state = 'code';
-    } else if (char === '/' && next === '/') {
-      out[i] = out[i + 1] = ' '; i += 1; state = 'line-comment';
-    } else if (char === '/' && next === '*') {
-      out[i] = out[i + 1] = ' '; i += 1; state = 'block-comment';
-    } else if (char === "'") {
-      if (maskStrings) out[i] = ' ';
-      state = 'single';
-    } else if (char === '"') {
-      if (maskStrings) out[i] = ' ';
-      state = 'double';
-    } else if (char === '`') {
-      if (maskStrings) out[i] = ' ';
-      state = 'template';
-    }
-  }
-  return out.join('');
-}
-
-function matchingParen(masked, openAt) {
-  let depth = 0;
-  for (let i = openAt; i < masked.length; i += 1) {
-    if (masked[i] === '(') depth += 1;
-    else if (masked[i] === ')' && --depth === 0) return i;
-  }
-  return -1;
-}
-
-function splitTopLevel(source) {
-  const masked = lexicalMask(source);
-  const parts = [];
-  let start = 0, round = 0, square = 0, curly = 0;
-  for (let i = 0; i < masked.length; i += 1) {
-    if (masked[i] === '(') round += 1;
-    else if (masked[i] === ')') round -= 1;
-    else if (masked[i] === '[') square += 1;
-    else if (masked[i] === ']') square -= 1;
-    else if (masked[i] === '{') curly += 1;
-    else if (masked[i] === '}') curly -= 1;
-    else if (masked[i] === ',' && round === 0 && square === 0 && curly === 0) {
-      parts.push(source.slice(start, i)); start = i + 1;
-    }
-  }
-  parts.push(source.slice(start));
-  return parts;
-}
-
-function piOnCalls(source) {
-  const masked = lexicalMask(source);
-  const calls = [];
-  const pattern = /\bpi\s*\.\s*on\s*\(/g;
-  for (const match of masked.matchAll(pattern)) {
-    const open = masked.indexOf('(', match.index);
-    const close = matchingParen(masked, open);
-    if (close >= 0) calls.push(source.slice(open + 1, close));
-  }
-  return calls;
-}
-
-function directGuardedMessageRewrite(handler) {
-  const masked = lexicalMask(handler);
-  let round = 0, square = 0, curly = 0, arrow = -1;
-  for (let i = 0; i < masked.length - 1; i += 1) {
-    if (masked[i] === '(') round += 1;
-    else if (masked[i] === ')') round -= 1;
-    else if (masked[i] === '[') square += 1;
-    else if (masked[i] === ']') square -= 1;
-    else if (masked[i] === '{') curly += 1;
-    else if (masked[i] === '}') curly -= 1;
-    else if (masked.slice(i, i + 2) === '=>' && round === 0 && square === 0 && curly === 0) { arrow = i; break; }
-  }
-  if (arrow < 0) return false;
-
-  let left = lexicalMask(handler.slice(0, arrow), false).trim().replace(/^async\s+/, '').trim();
-  if (left.startsWith('(') && left.endsWith(')')) {
-    const parameters = splitTopLevel(left.slice(1, -1));
-    if (parameters.length !== 1) return false;
-    left = parameters[0].trim();
-  }
-  const parameter = /^([A-Za-z_$][\w$]*)(?:\s*:\s*(?:any|unknown))?$/.exec(left);
-  const eventName = parameter?.[1];
-  if (!eventName) return false;
-
-  const right = handler.slice(arrow + 2).trim().replace(/;\s*$/, '');
-  const rightMask = lexicalMask(right);
-  const guarded = /^guardedMessageRewrite\s*\(/.exec(rightMask);
-  if (!guarded) return false;
-  const open = rightMask.indexOf('(', guarded.index);
-  const close = matchingParen(rightMask, open);
-  if (close < 0 || rightMask.slice(close + 1).trim()) return false;
-  const args = splitTopLevel(right.slice(open + 1, close));
-  if (args.length !== 2 || args[0].trim() !== eventName) return false;
-
-  // Arguments are evaluated before the helper runs. The note therefore has to be inert: a
-  // precomputed identifier or string literal, never `noteFor(event)` or `event["message"]...`.
-  const note = args[1].trim();
-  const identifier = /^[A-Za-z_$][\w$]*$/.test(note) && note !== eventName;
-  const stringLiteral = /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$/.test(note);
-  return identifier || stringLiteral;
-}
 
 // ── release checks ───────────────────────────────────────────────────────────────────────────
 
@@ -333,8 +217,16 @@ const CHECKS = [
     // writer and the gate accepted it 12/12 under both runtimes. The previous commit CLAIMED this
     // enforcement in two file headers and never implemented it — a claim-without-enforcement fix
     // for a claim-without-enforcement defect. This is the enforcement.
+    //
+    // WOSC-221, 2026-08-23. The enforcement was real but it read VOCABULARY: it scanned for the
+    // token sequence `pi . on (` and reconciled against executable `"message_end"` literals.
+    // `const h = "message_" + "end"; pi["on"](h, unsafe)` has neither, so the audit reported
+    // `0 message_end handlers` and the gate passed 14/14. The check now runs a REGISTRATION
+    // GRAMMAR first — direct dotted call, unaliased binding, literal event name — so a name the
+    // audit cannot read is a finding instead of a silence, and only then does event-specific
+    // policy apply. Same module as `scripts/extension-audit.mjs`; they cannot drift.
     id: 'terminal-message-safety',
-    title: 'no extension rewrites an assistant message without the terminal-message predicate',
+    title: 'every Pi registration is literal, and no extension rewrites an assistant message without the terminal-message predicate',
     async run() {
       const safety = await import(join(ROOT, 'src/safety.mjs'));
 
@@ -351,51 +243,79 @@ const CHECKS = [
       assert(directGuardedMessageRewrite('async (event: any) => guardedMessageRewrite(event, note)'),
         'the direct sanctioned handler shape must remain usable');
 
-      // 2. Audit each registration, not the whole file. A `message_end` callback is allowed only
-      //    in one mechanically recognisable form: a direct expression-arrow return from
-      //    `guardedMessageRewrite(event, note)`, imported from the shipped safety module. `note`
-      //    must be an inert identifier or string because arguments run before the guard. Blocks,
-      //    aliases, raw message access, calls, and unrelated helper mentions are all rejected.
-      const files = (await readdir(join(ROOT, 'extensions'))).filter((name) => /\.(ts|mjs)$/.test(name));
-      assert(files.length > 0, 'no extensions found to audit');
-      const offences = [];
-      let handlers = 0;
-      for (const name of files) {
-        const body = await read(join('extensions', name));
-        const executable = lexicalMask(body, false);
-        const messageEndLiterals = [...executable.matchAll(/(["'`])message_end\1/g)].length;
-        const safetyImports = [...executable.matchAll(
-          /^\s*import\s*\{([^}]*)\}\s*from\s*["']\.\.\/src\/safety\.mjs["']\s*;?\s*$/gm)];
-        const importsGuard = safetyImports.some(([, specifiers]) => splitTopLevel(specifiers)
-          .some((specifier) => specifier.trim() === 'guardedMessageRewrite'));
-        let auditedHandlers = 0;
-        for (const argsSource of piOnCalls(body)) {
-          const args = splitTopLevel(argsSource);
-          if (!/^(?:["']message_end["']|`message_end`)$/.test(args[0]?.trim() ?? '')) continue;
-          handlers += 1;
-          auditedHandlers += 1;
-          if (!importsGuard || !directGuardedMessageRewrite(args[1] ?? '')) {
-            offences.push(`${name}: message_end must directly return guardedMessageRewrite(event, note) from safety.mjs`);
-          }
-        }
-        if (messageEndLiterals !== auditedHandlers) {
-          offences.push(`${name}: found ${messageEndLiterals} executable message_end literal(s) but audited ${auditedHandlers} direct pi.on registration(s)`);
-        }
-        const helperMentions = [...lexicalMask(body).matchAll(/\bguardedMessageRewrite\b/g)].length;
-        const expectedHelperMentions = (importsGuard ? 1 : 0) + auditedHandlers;
-        if (helperMentions !== expectedHelperMentions) {
-          offences.push(`${name}: guardedMessageRewrite must be one exact import plus one call per audited handler; found ${helperMentions}, expected ${expectedHelperMentions}`);
-        }
+      // 2. FALSE-POSITIVE CONTROLS, run before the repository is judged. Fixtures the grammar must
+      //    accept and fixtures it must reject, so a grammar that has stopped discriminating fails
+      //    here rather than passing quietly over a clean tree.
+      const API = 'import type { ExtensionAPI } from "pi";\n'
+        + 'import { guardedMessageRewrite } from "../src/safety.mjs";\n'
+        + 'const inertNote = "\\nNOTE";\n'
+        + 'export default function ext(pi: ExtensionAPI) {\n';
+      const fixture = (body) => `${API}${body}\n}\n`;
+      const clean = (body) => auditExtensionSource('fixture.ts', fixture(body)).findings;
+      const ACCEPT = {
+        'ordinary literal event': 'pi.on("tool_result", async (event, ctx) => undefined);',
+        'sanctioned guarded terminal handler':
+          'pi.on("message_end", (event: any) => guardedMessageRewrite(event, inertNote));',
+        'both together':
+          'pi.on("session_start", async () => undefined);\n'
+          + '  pi.on("message_end", (event: any) => guardedMessageRewrite(event, inertNote));',
+      };
+      const REJECT = {
+        'computed name + bracket registration':
+          'const h = "message_" + "end";\n  pi["on"](h, async (event: any) => ({ message: event.message }));',
+        'array join computed name':
+          'const e = ["message", "end"].join("_");\n  pi.on(e, async (event: any) => ({ message: event.message }));',
+        'substituted template name':
+          'pi.on(`message_${"end"}`, async (event: any) => ({ message: event.message }));',
+        'aliased api binding': 'const p = pi;\n  p.on("message_end", async (event: any) => ({ message: event.message }));',
+        'destructured registration': 'const { on } = pi;\n  on("message_end", async (event: any) => ({ message: event.message }));',
+        'unsafe direct terminal handler':
+          'pi.on("message_end", async (event: any) => ({ message: { ...event.message, content: [] } }));',
+      };
+      for (const [label, body] of Object.entries(ACCEPT)) {
+        const findings = clean(body);
+        assert(findings.length === 0,
+          `FALSE POSITIVE — the grammar rejected a legitimate registration (${label}): ${findings.map(formatFinding).join('; ')}`);
       }
-      assert(offences.length === 0,
-        `an assistant message handler is not structurally tied to the sanctioned rewrite:\n  ${[...new Set(offences)].join('\n  ')}`);
+      for (const [label, body] of Object.entries(REJECT)) {
+        assert(clean(body).length > 0, `the grammar accepted an unsafe registration (${label})`);
+      }
+      assert(directGuardedMessageRewrite('async (event: any) => guardedMessageRewrite(event, note)'),
+        'the direct sanctioned handler shape must remain usable');
 
-      // 3. The headers that make the claim must name the enforcement, so the two cannot drift apart
+      // 3. Audit the repository. Every packaged extension, every registration — the manifest's
+      //    declared entrypoints unioned with everything in `extensions/`, so a file that is shipped
+      //    but undeclared, or declared but unlisted, is still judged.
+      const pkg = JSON.parse(await read('package.json'));
+      const names = new Set((pkg.pi?.extensions ?? []).map((entry) => entry.replace(/^\.\//, '')));
+      for (const name of await readdir(join(ROOT, 'extensions'))) {
+        if (/\.(ts|mjs|js)$/.test(name)) names.add(join('extensions', name));
+      }
+      const paths = [...names].sort();
+      assert(paths.length > 0, 'no extensions found to audit');
+      const entries = await Promise.all(paths.map(async (path) => [path, await read(path)]));
+      const audit = auditExtensionSources(entries);
+      assert(audit.findings.length === 0,
+        `the extension registration grammar was violated:\n  ${audit.findings.map(formatFinding).join('\n  ')}\n  `
+        + [...new Set(audit.findings.map((finding) => finding.rule))].sort()
+          .map((rule) => `${rule}: ${RULES[rule]}`).join('\n  '));
+
+      // 4. The standalone scanner must exist, be packaged, and agree with this check on this tree.
+      //    A gate whose portable proof command is absent is a gate nobody outside can re-run.
+      assert(await exists('scripts/extension-audit.mjs'), 'the standalone registration audit must ship');
+      assert((pkg.files ?? []).includes('scripts/extension-audit.mjs'),
+        'the standalone registration audit must be inside the package manifest');
+      const standalone = await run(process.execPath, ['scripts/extension-audit.mjs']);
+      assert(standalone.code === 0,
+        `the standalone audit disagrees with this check on a clean tree:\n${standalone.stdout}${standalone.stderr}`);
+
+      // 5. The headers that make the claim must name the enforcement, so the two cannot drift apart
       //    again without this check noticing.
       const guardsHeader = await read('extensions/wos-guards.ts');
       assert(/release-check/.test(guardsHeader) && /safety\.mjs/.test(guardsHeader),
         'the file claiming terminal-message safety must name where it is enforced');
-      return ok(`${files.length} extensions audited · ${handlers} message_end handlers · direct sanctioned return required · mid-flight refused`);
+      return ok(`${paths.length} extensions · ${audit.registrations} literal registrations · ${audit.terminalHandlers} message_end handler(s) · `
+        + `${Object.keys(ACCEPT).length} accept + ${Object.keys(REJECT).length} reject controls · standalone audit agrees`);
     },
   },
   {
@@ -766,7 +686,14 @@ const CHECKS = [
   },
 ];
 
-// ── mutations: each must be caught by the check it names ─────────────────────────────────────
+// ── mutations: each must land at its DECLARED expectation ────────────────────────────────────
+//
+// `expect: 'killed'` (default) — the gate must reject the tree, and the named check must be the one
+// that does it. `expect: 'accepted'` — a LEGITIMATE registration the grammar must not touch; the
+// gate must still exit 0. Both directions are enforced, because a control arm that gets killed is a
+// false positive and fails this gate exactly like a survivor. WOSC-221 added the second direction:
+// the brief asked for legitimate controls inside the mutation table, and a table that can only
+// express "must fail" cannot hold one.
 
 const MUTATIONS = [
   { id: 'stale-doc', catches: 'manifest-and-docs', file: 'CLAUDE.md',
@@ -890,10 +817,87 @@ export default function guards(pi: ExtensionAPI) {
   { id: 'auto-disable-clears-on-reload', catches: 'dream-governance', file: 'src/store.mjs',
     apply: (body) => body.replace('  state.dream.disabled = state.dream.disabled === true;',
       '  state.dream.disabled = false;') },
+
+  // ── WOSC-221. Five computed/dynamic registration forms, then two legitimate controls. ──────
+  //
+  // THE EXACT PATCH an independent verifier landed at 22e4efd, kept verbatim. It passed the full
+  // positive gate under two runtimes while `terminal-message-safety` printed `0 message_end
+  // handlers`: `pi["on"]` was not the scanned token sequence, and `"message_" + "end"` produced no
+  // literal to reconcile against. If this ever survives again, the grammar is gone.
+  { id: 'terminal-safety-computed-hook-bypass', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  const terminalHook = "message_" + "end";
+  pi["on"](terminalHook, async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe computed-hook mutation" }] },
+  }));`) },
+  // The same evasion with a DIRECT dotted call, so nothing about `pi["on"]` is load-bearing: the
+  // event name alone is unreadable, and an unreadable name must be refused, not skipped.
+  { id: 'terminal-safety-join-computed-event', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  const unsafeHandler = async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe join mutation" }] },
+  });
+  const e = ["message", "end"].join("_");
+  pi.on(e, unsafeHandler);`) },
+  // A template literal with a substitution is a computed name that LOOKS literal.
+  { id: 'terminal-safety-template-computed-event', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  const tail = "end";
+  pi.on(\`message_\${tail}\`, async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe template mutation" }] },
+  }));`) },
+  // Carries NO `message_end` token anywhere — not in a literal, not in a comment, not in an
+  // identifier. Every vocabulary-based check is blind to it by construction.
+  { id: 'terminal-safety-tokenless-bracket-event', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  const parts = ["messa", "ge", "_e", "nd"];
+  const key = "o" + "n";
+  (pi as any)[key](parts.join(""), async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe tokenless mutation" }] },
+  }));`) },
+  // Aliasing the binding puts every later registration outside the audit's view. The binding must
+  // not be able to escape at all — that is what makes "every registration is literal" checkable.
+  { id: 'terminal-safety-aliased-api-binding', catches: 'terminal-message-safety', file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  const register: any = pi;
+  register.on("message_end", async (event: any) => ({
+    message: { ...event.message,
+      content: [...event.message.content, { type: "text", text: "unsafe alias mutation" }] },
+  }));`) },
+
+  // FALSE-POSITIVE CONTROLS. These are legitimate and the gate must still exit 0. Killing one is a
+  // false positive on the one thing the grammar is forbidden to break: ordinary Pi extension code.
+  { id: 'control-ordinary-literal-event', catches: 'terminal-message-safety', expect: 'accepted',
+    file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('export default function guards(pi: ExtensionAPI) {',
+      `export default function guards(pi: ExtensionAPI) {
+  pi.on("turn_end", async (_event, _ctx) => undefined);`) },
+  { id: 'control-guarded-message-end', catches: 'terminal-message-safety', expect: 'accepted',
+    file: 'extensions/wos-guards.ts',
+    apply: (body) => body.replace('import { appendNote, failOpen, killSwitch } from "../src/safety.mjs";',
+      'import { appendNote, failOpen, guardedMessageRewrite, killSwitch } from "../src/safety.mjs";')
+      .replace('export default function guards(pi: ExtensionAPI) {',
+        `const inertGuardNote = "\\n[guard] note";
+
+export default function guards(pi: ExtensionAPI) {
+  pi.on("message_end", (event: any) => guardedMessageRewrite(event, inertGuardNote));`) },
 ];
 
+// `archive/` joins the copy set for WOSC-221: `tests/package.test.mjs` reads it, so without it
+// `unit-suite` failed inside EVERY mutation child. Each arm was still attributed correctly —
+// `catches` is checked by name — but "killed by terminal-message-safety, not incidentally by
+// another check" could not be READ off the run while an unrelated check was red in every child.
 const COPY = ['package.json', 'cli.mjs', 'README.md', 'CLAUDE.md', 'src', 'tests', 'scripts',
-  'extensions', 'skills', 'prompts', 'data', 'docs', '.github'];
+  'extensions', 'skills', 'prompts', 'data', 'docs', '.github', 'archive'];
 
 async function runMutation(mutation) {
   const dir = await mkdtemp(join(tmpdir(), `wos-neg-${mutation.id}-`));
@@ -905,19 +909,29 @@ async function runMutation(mutation) {
     const original = await readFile(target, 'utf8');
     const mutated = mutation.apply(original);
     if (mutated === original) {
-      return { id: mutation.id, killed: false, why: 'the mutation did not change the file — it is a no-op, not a test' };
+      return { id: mutation.id, ok: false, verdict: 'NO-OP', why: 'the mutation did not change the file — it is a no-op, not a test' };
     }
     await writeFile(target, mutated, 'utf8');
     const result = await run(process.execPath, [join(dir, 'scripts', 'release-check.mjs'), '--child'], { cwd: dir });
-    if (result.code === 0) {
-      return { id: mutation.id, killed: false, why: `the gate ACCEPTED a tree with ${mutation.id} — it is not a gate` };
-    }
     const failed = [...result.stdout.matchAll(/^FAIL:(\S+)/gm)].map(([, id]) => id);
+    const expect = mutation.expect ?? 'killed';
+
+    if (expect === 'accepted') {
+      return result.code === 0
+        ? { id: mutation.id, ok: true, verdict: 'ACCEPTED', why: `control: legitimate registration accepted, gate still exit 0` }
+        : { id: mutation.id, ok: false, verdict: 'REJECTED',
+          why: `FALSE POSITIVE — the gate rejected a LEGITIMATE registration via ${failed.join(', ') || 'no named check'}` };
+    }
+    if (result.code === 0) {
+      return { id: mutation.id, ok: false, verdict: 'SURVIVED', why: `the gate ACCEPTED a tree with ${mutation.id} — it is not a gate` };
+    }
     if (!failed.includes(mutation.catches)) {
-      return { id: mutation.id, killed: false,
+      return { id: mutation.id, ok: false, verdict: 'MISATTRIBUTED',
         why: `rejected, but by ${failed.join(', ') || 'no named check'} instead of ${mutation.catches} — the wrong check is holding the line` };
     }
-    return { id: mutation.id, killed: true, why: `killed by ${mutation.catches}` };
+    const incidental = failed.filter((id) => id !== mutation.catches);
+    return { id: mutation.id, ok: true, verdict: 'KILLED',
+      why: `killed by ${mutation.catches}${incidental.length ? ` (also failed: ${incidental.join(', ')})` : ' only'}` };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -937,20 +951,23 @@ if (NEGATIVE) {
   for (const mutation of MUTATIONS) {
     const result = await runMutation(mutation);
     results.push(result);
-    console.log(`${result.killed ? 'KILLED  ' : 'SURVIVED'} ${result.id.padEnd(32)} ${result.why}`);
+    console.log(`${result.verdict.padEnd(13)} ${result.id.padEnd(42)} ${result.why}`);
   }
-  const survivors = results.filter((result) => !result.killed);
+  const wrong = results.filter((result) => !result.ok);
+  const controls = MUTATIONS.filter((mutation) => mutation.expect === 'accepted');
   const uncovered = CHECKS.map((check) => check.id).filter((id) => !MUTATIONS.some((m) => m.catches === id));
   console.log('');
   if (uncovered.length) {
     console.log(`NOT mutation-covered (stated, not hidden): ${uncovered.join(', ')}`);
     console.log('');
   }
-  if (survivors.length) {
-    console.error(`NEGATIVE GATE FAILED — ${survivors.length}/${MUTATIONS.length} mutation(s) survived. The gate is not a gate.`);
+  if (wrong.length) {
+    console.error(`NEGATIVE GATE FAILED — ${wrong.length}/${MUTATIONS.length} arm(s) did not land at their declared expectation:`);
+    for (const result of wrong) console.error(`  ${result.verdict} ${result.id}: ${result.why}`);
     process.exit(1);
   }
-  console.log(`NEGATIVE GATE PASSED — ${MUTATIONS.length}/${MUTATIONS.length} mutations killed by the check that owns them.`);
+  console.log(`NEGATIVE GATE PASSED — ${MUTATIONS.length - controls.length} mutation(s) killed by the check that owns them, `
+    + `${controls.length} legitimate control(s) accepted, ${MUTATIONS.length} arm(s) total.`);
   console.log('Exiting 3 by design: --negative asserts the tree is rejectable, so it must not exit 0.');
   process.exit(3);
 }
