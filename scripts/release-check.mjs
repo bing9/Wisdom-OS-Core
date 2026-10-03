@@ -892,12 +892,13 @@ export default function guards(pi: ExtensionAPI) {
   pi.on("message_end", (event: any) => guardedMessageRewrite(event, inertGuardNote));`) },
 ];
 
+// `pi-config/` joins it because package.files names it (manifest + portability run in every child).
 // `archive/` joins the copy set for WOSC-221: `tests/package.test.mjs` reads it, so without it
 // `unit-suite` failed inside EVERY mutation child. Each arm was still attributed correctly —
 // `catches` is checked by name — but "killed by terminal-message-safety, not incidentally by
 // another check" could not be READ off the run while an unrelated check was red in every child.
 const COPY = ['package.json', 'cli.mjs', 'README.md', 'CLAUDE.md', 'src', 'tests', 'scripts',
-  'extensions', 'skills', 'prompts', 'data', 'docs', '.github', 'archive'];
+  'extensions', 'skills', 'prompts', 'data', 'docs', '.github', 'archive', 'pi-config'];
 
 async function runMutation(mutation) {
   const dir = await mkdtemp(join(tmpdir(), `wos-neg-${mutation.id}-`));

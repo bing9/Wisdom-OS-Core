@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "__MCP_SERVER_NAME__": {
+      "command": "__MCP_SERVER_COMMAND__",
+      "args": [],
+      "exposure": "deferred",
+      "description": "Read-only knowledge server. Every tool you admit must also be listed in mcp_allowlist.yaml."
+    }
+  }
+}

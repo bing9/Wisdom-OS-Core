@@ -1,0 +1,45 @@
+{
+  "cacheWarming": "idle",
+  "compaction": {
+    "modelOverrides": {
+      "__DEFAULT_PROVIDER__/__DEFAULT_MODEL__": {
+        "reserveTokens": 65536
+      }
+    }
+  },
+  "defaultModel": "__DEFAULT_MODEL__",
+  "defaultProvider": "__DEFAULT_PROVIDER__",
+  "defaultThinkingLevel": "xhigh",
+  "enabledModels": [
+    "__DEFAULT_PROVIDER__/__DEFAULT_MODEL__"
+  ],
+  "extensions": [
+    "-builtin:codemode"
+  ],
+  "hideThinkingBlock": true,
+  "observational-memory": {
+    "models": {
+      "observer": {
+        "provider": "__OM_OBSERVER_PROVIDER__",
+        "id": "__OM_OBSERVER_MODEL__",
+        "thinking": "low"
+      },
+      "consolidator": {
+        "provider": "__OM_CONSOLIDATOR_PROVIDER__",
+        "id": "__OM_CONSOLIDATOR_MODEL__",
+        "thinking": "high"
+      }
+    }
+  },
+  "packages": [
+    "__PI_SUBAGENTS_PKG__",
+    "__PI_OM_PKG__"
+  ],
+  "prompts": [],
+  "skills": [
+    "__WISDOM_OS_ROOT__/.claude/skills"
+  ],
+  "steeringMode": "all",
+  "theme": "dark",
+  "tuiMode": "regular"
+}

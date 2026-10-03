@@ -1,0 +1,7 @@
+#!/bin/bash
+# wos-fleet-restart — ONE command to bring every WOS Director + Butler back in the SAME session, SAME pane
+# (request 2026-09-29). Plan-only unless --apply. Run it from your own terminal; `--help` for modes.
+#   wos-fleet-restart --apply            restart everything        wos-fleet-restart --boot --apply   after a reboot
+#   wos-fleet-restart --only DIR-wos     one Director (plan)       wos-fleet-restart --at-risk        stale-cwd Pis only
+cd "$HOME" 2>/dev/null || cd / || exit 3        # never inherit a stale (ENOTCONN / deleted) cwd
+exec /usr/bin/python3 "$HOME/.wos-runtime/fleet/wos_fleet_restart.py" "$@"

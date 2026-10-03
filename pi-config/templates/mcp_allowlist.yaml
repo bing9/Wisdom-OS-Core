@@ -1,0 +1,7 @@
+# mcp_allowlist.yaml — read by extensions/wos-mcp-gate.ts. Installer-only: change it deliberately.
+# tools: read-only tools. An mcp__ entry is admitted only while its server declares readOnlyHint=true.
+tools:
+  - tool_search
+  # - mcp__<server>__<read_only_tool>
+# write_tools: write-capable MCP tools whose target can never be Soul / AGENTS.md / home. Keep empty.
+write_tools: []

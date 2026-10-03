@@ -1,0 +1,4 @@
+#!/bin/bash
+# wos_send -- thin wrapper so the director types one short command.
+# Mirrors wos_spawn. Labelled + ledgered live-steer into a RUNNING peer.
+exec /usr/bin/python3 "$HOME/.wos-runtime/fleet/wos_send.py" "$@"

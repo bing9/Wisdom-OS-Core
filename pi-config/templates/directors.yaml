@@ -1,0 +1,23 @@
+# directors.yaml — the fleet registry: one row per permanent Director. Template; fill your own.
+schema: 1
+ratified: YYYY-MM-DD
+ratified_by: owner
+directors:
+- name: DIR-wos
+  class: permanent
+  project_slugs:
+  - example-project
+  domain: harness — the system itself
+  owns: 'The scheduler, the crons, fleet durability and recovery, the skills and instructions.'
+  judgment: 'Does this make the system more knowable and more recoverable, and does it reduce the owner''s load?'
+  handover: DIRECTOR_HANDOVER_wos.md
+  agents_prefix: wos-
+- name: DIR-example
+  class: permanent
+  project_slugs:
+  - example-project
+  domain: one project domain
+  owns: 'Object-work for its projects.'
+  judgment: 'Does this meet the commitment, and is it safe to send?'
+  handover: DIRECTOR_HANDOVER_example.md
+  agents_prefix: ex-

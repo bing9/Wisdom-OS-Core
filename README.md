@@ -118,8 +118,20 @@ src/dream.mjs              continuous-improvement loop: bounded triggers, add/am
 extensions/wos-dream.ts    the loop's Pi adapter — runs on settle, never in the foreground
 scripts/release-check.mjs  the release gate, positive and negative
 cli.mjs                    direct state CLI
+pi-config/                 sanitized, installable Pi harness config (generated weekly; see pi-config/README.md)
 archive/web-v0.1/          retained browser prototype; not shipped as the product interface
 ```
+
+## Portable Pi harness config
+
+`pi-config/` is a sanitized export of a working, heavily customized WOS-style Pi harness: settings,
+guard and statusline extensions, subagent role profiles, the `AGENTS.md` contract as a template,
+the model-choice table, the MCP allowlist, and the Director fleet scripts. A deterministic exporter
+outside this repo regenerates it every week. A gate refuses the whole export if any private name,
+path, host, id, token or project name remains, and the portability audit below covers `pi-config/`
+too. Each run makes a local commit only when something changed. It never pushes. To install on a new
+box, follow `pi-config/README.md`: fill three placeholders, run `python3 install.py` to see the plan,
+then run it again with `--apply`. What stays private, and why, is listed in `pi-config/EXCLUDED.md`.
 
 ## Release gate
 

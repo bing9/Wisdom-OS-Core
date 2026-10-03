@@ -1,0 +1,77 @@
+# model_choices.yaml — machine-readable mirror of the owner's GDoc "Model Choices" (request 2026-10-03).
+# The doc is the source of truth; this file is its mirror. Change it only when the doc changes, then run
+#   /usr/bin/python3 ~/.wos-runtime/fleet/model_choices.py check
+# which compares this file with the live doc, the agent profiles (agents/*.md) and the OM settings.
+# Read by the dispatch guard (pi-interactive-subagents model-choice-guard.ts -> model_choices.py admit).
+schema: wos.model_choices/v1
+source:
+  title: Model Choices
+  last_edited: "2026-10-03"
+
+# Identity-preserving host renames: the doc's name -> the id the runtime lists today. NOT a choice change
+# (request 2026-09-23: the host withdrew internal/observer-model as the served observer model and renamed the 1M GPT id).
+host_aliases:
+  internal/observer-model: internal/observer-model
+  openai/gpt-5.6-sol-1m: openai/gpt-5.6-sol[1m]
+
+# Conditions a fallback may name. Only these exist. Provider availability (503/429/unroutable/overloaded) is NOT
+# one: the dispatcher retries the SAME model later, or leaves the request pending for its owning Director.
+# No model question is ever routed to the owner. Scope: single-user accident guard (AGENTS.md 2026-10-03), not anti-forgery.
+fallback_conditions:
+  provider_policy_refusal: >-
+    The prior child of the SAME request_id and SAME role, running the role default, ended on a provider
+    usage-policy/content refusal (rawStopReason=refusal, or an error naming the provider's Usage Policy), read
+    from its dispatch record providerEventLog or its session transcript.
+
+roles:
+  om-observer:      {model: internal/observer-model,          thinking: low,    allowed_fallbacks: []}
+  om-consolidator:  {model: openai/gpt-5.6-sol-1m,     thinking: high,   allowed_fallbacks: []}
+  om-wiki-er:       {model: openai/gpt-5.6-sol-1m,     thinking: high,   allowed_fallbacks: [], same_as: om-consolidator}
+  om-harness-er:    {model: openai/gpt-5.6-sol-1m,     thinking: high,   allowed_fallbacks: [], same_as: om-consolidator}
+  scout:            {model: internal/observer-model,          thinking: low,    allowed_fallbacks: []}
+  researcher:       {model: openai/gpt-5.6-sol-1m,     thinking: medium, allowed_fallbacks: []}
+  implementer:
+    model: anthropic/claude-opus-5-5
+    thinking: medium
+    allowed_fallbacks:
+      - {model: openai/gpt-5.6-sol, when: provider_policy_refusal, ruling: owner-2026-10-03-policy-refusal}
+  worker:           {model: anthropic/claude-opus-5-5, thinking: medium, allowed_fallbacks: []}
+  analyst:          {model: anthropic/claude-opus-5-5, thinking: high,   allowed_fallbacks: []}
+  verifier:         {model: openai/gpt-5.6-sol-1m,     thinking: xhigh,  allowed_fallbacks: []}
+  # front-door = the owner Bot, the Slack front agent (request 2026-10-03; the owner 2026-10-03 Q2: default
+  # anthropic/claude-sonnet-5-5). Doc row added 2026-10-03 (the owner Bot Slack front door, chat speed).
+  front-door:       {model: anthropic/claude-sonnet-5-5, thinking: low,  allowed_fallbacks: []}
+
+# Doc row label -> role key above (used by `check` to parse the live doc table).
+doc_row_labels:
+  "OM:observer": om-observer
+  "OM:consolidator": om-consolidator
+  "OM:wiki-er": om-wiki-er
+  "OM:harness-er": om-harness-er
+  scout: scout
+  researcher: researcher
+  implementer: implementer
+  worker: worker
+  analyst: analyst
+  verifier: verifier
+  front-door: front-door
+
+rulings:
+  - id: owner-2026-10-03-off-table
+    date: "2026-10-03"
+    quote: <the owner's ruling, verbatim>
+    meaning: An off-table `model:` override is a dispatcher error; the guard refuses it.
+  - id: owner-2026-10-03-policy-refusal
+    date: "2026-10-03"
+    quote: <the owner's ruling, verbatim>
+    meaning: >-
+      (1) OK — implementer -> openai/gpt-5.6-sol AFTER the Opus run was stopped by an Anthropic usage-policy refusal
+      (impl-home-alias-guard, request 2026-10-03). (2) NOT OK — implementer -> GPT with no such
+      failure (rebuild-local; Opus was available). Encoded as the conditional implementer fallback above.
+  - id: owner-2026-10-03-no-ask
+    date: "2026-10-03"
+    quote: <the owner's ruling, verbatim>
+    meaning: >-
+      The guard never routes a model question to the owner. Default unavailable -> wait/retry the same model, then retain
+      pending for the owning Director. Policy refusal -> conditional fallback admitted automatically with evidence.
+      Any other off-table override -> refused back to the dispatching agent, which uses the role default.

@@ -23,7 +23,8 @@
     "scripts/extension-audit.mjs",
     "cli.mjs",
     "data/board.example.json",
-    "docs"
+    "docs",
+    "pi-config"
   ],
   "pi": {
     "extensions": [

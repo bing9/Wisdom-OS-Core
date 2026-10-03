@@ -1,0 +1,27 @@
+{
+  "providers": {
+    "anthropic": {
+      "modelOverrides": {
+        "claude-opus-5": {
+          "contextWindow": 750000,
+          "promptCache": {
+            "short": 300
+          }
+        },
+        "claude-opus-5-5": {
+          "contextWindow": 750000,
+          "promptCache": {
+            "short": 300
+          }
+        }
+      }
+    },
+    "openai": {
+      "modelOverrides": {
+        "gpt-5.6-sol[1m]": {
+          "contextWindow": 750000
+        }
+      }
+    }
+  }
+}
