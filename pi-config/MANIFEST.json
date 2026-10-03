@@ -1,7 +1,7 @@
 {
  "files": {
   "APPEND_SYSTEM.md": "sha256:c2cc7e2577231b67003e17e972a7ae017a21b237a3b740ec703d2324cc9c4749",
-  "EXCLUDED.md": "sha256:004dc26319f989702dcb685c59c49869e4e45cc1bd5ef635de9503edda2c9cf1",
+  "EXCLUDED.md": "sha256:ceb0f5b59b376abc6adfaa8607479ce41067644d335e922547ab27a85ff5569b",
   "README.md": "sha256:f6aa973c34bafe6996a763452a15fb83b6d827f62aceb6ad2e7c87c596f509ca",
   "agents/analyst.md": "sha256:1b87b6cc05be0bf895caf732eea6b240b0edbc26f2b806b8bebe68b7257c2193",
   "agents/implementer.md": "sha256:7dc5bb63eb7a63d9a6b1a5f3e6b20f93f27215097d88d5946ab9292a639f888c",

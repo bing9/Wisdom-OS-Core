@@ -18,4 +18,5 @@ project names and judgments).
 | extension `wos-prior-knowledge.ts` | retrieval over the owner's private knowledge graph and people/Soul files |
 | extension `wos-project-estate.ts` | the owner's project/estate map; encodes private project names and routing |
 | employer plugin packages in settings | internal-only skills and tools; install your own |
+| the owner's skill library (`.claude/skills` under the root) | personal procedures full of private context; Core ships its own `skills/` |
 | fleet scripts beyond `runtime/fleet/` | depend on the private runtime tree (spawn, liveness, cron); port on demand |
