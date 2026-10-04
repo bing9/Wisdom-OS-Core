@@ -58,7 +58,7 @@ only you make>** 3. **<Razor 3: your bar for acting at all>**
   the real chokepoint, implement or route it, add regression evidence; else report **UNRESOLVED**.
   At closure, an incident the owner ruled on gets a one-line Case via `cases_kernel`; a P0 gets a full
   Case; never Soul.
-- **Upstream bugs (Pi, Herdr, sync-tool, drive-mount): build a WOS workaround, file nothing upstream**;
+- **Upstream bugs (Pi, Herdr, [sync-tool], [internal-clone-tool]): build a WOS workaround, file nothing upstream**;
   remove the scaffold once upstream fixes it (`upstream_workarounds.yaml`).
   OM is owner-owned, not upstream; DIR-wos designs it; `99_Reference` holds a sanitized copy.
 - Sweeps and long processing → a Pi-native `subagent` child.
@@ -72,7 +72,7 @@ only you make>** 3. **<Razor 3: your bar for acting at all>**
 ## Retrieve before answering or measuring
 
 Never answer a domain question from general knowledge. Start at the canonical home; broaden on a
-miss; then ask where the source lives. 🔴 **"Not found" requires employer internal
+miss; then ask where the source lives. 🔴 **"Not found" requires [Company] internal
 search** (`internal-cli search.docs`, NL + keywords, Drive owner/name for Docs); otherwise the claim is
 INCOMPLETE. 🔴 **Retrieve a flag's or metric's established definition** (`04_Knowledge/concept/` + QMD)
 before encoding it; measuring rows does not define it.
@@ -88,9 +88,9 @@ before encoding it; measuring rows does not define it.
 | GChat/Gmail/[Internal-Social]/GDocs | wos-runtime chat tables, `internal-cli [internal-social].feed`, `knowledge_open` |
 
 Skills route from Pi `settings.json` + SKILL.md descriptions (`05_Personal_WOS/skill/` = packaging/viz
-graph). Numbers/charts → `/agentic-workflow`; fleet → `/agent-director`; employer-internal → `internal-cli`
+graph). Numbers/charts → `/agentic-workflow`; fleet → `/agent-director`; [Company]-internal → `internal-cli`
 (Pi MCP: allowlisted read-only `example_mcp` tools only; other MCP tools = `internal-cli` CLI; `mcp.json` is installer-only).
-Working state → team memory; browseable knowledge → WOS.
+Working state → [Company-AI] Memory; browseable knowledge → WOS.
 
 ## Hard invariants
 
@@ -99,7 +99,7 @@ Working state → team memory; browseable knowledge → WOS.
    never `$HOME/Obsidian Vault/`.
 2. 🔴 Verify every write, query, and publish at the real destination: numbers via
    `~/.wos-runtime/dq/verdict.py`, HTML browser-rendered.
-3. 🔴 Timezone: the owner = <owner-timezone>, host = Pacific, crons = UTC. Reconcile before
+3. 🔴 Timezone: the owner = <owner-timezone>, [dev-environment] = Pacific, crons = UTC. Reconcile before
    asserting a time or reading an mtime. Human time is the owner's.
 4. Check `03_Current/Name_Translations.md` before writing a person's name.
 5. Search before write; update in place; no duplicate, `.bak`, `.tmp`, or `_cleaned` files. Atomic
@@ -119,7 +119,7 @@ Working state → team memory; browseable knowledge → WOS.
 **SENSE → THINK → JUDGE → SURFACE → ACT → LEARN.** It turns when a precedent changed or confirmed a
 decision, a hidden variable was captured, or a pattern was strengthened, amended, or demoted;
 artifact counts are not evidence.
-Minimum decision capture is one sentence; only P0 needs a full Case. The host is the only
+Minimum decision capture is one sentence; only P0 needs a full Case. The [dev-environment] is the only
 writer. Location map: `retrieval-contract.md` §Location map.
 
 <!-- om-curator v1
