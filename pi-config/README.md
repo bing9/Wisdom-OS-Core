@@ -36,7 +36,8 @@ Prerequisites: Pi (`pi --version`), Node ≥ 20, Python ≥ 3.9, and optionally 
    credentials ship here.
 6. **Smoke test**: `pi --help`, then `pi -p 'say ok'`. Extensions whose private runtime helpers are absent
    fail open; a load error names the file.
-7. **Make it yours**. Edit `$WISDOM_OS_ROOT/AGENTS.md`, which is the contract every session reads. Then
+7. **Make it yours**. Fill every `<<FILL: …>>` block in `$WISDOM_OS_ROOT/AGENTS.md`, which is the contract every
+   session reads. `examples/AGENTS.owner-example.md` is the original owner's filled-in version, for reference. Then
    edit `~/.wos-runtime/director/directors.yaml` (your Directors), `~/.wos-runtime/fleet/model_choices.yaml`
    (models per role), and `~/.wos-runtime/harness/mcp_allowlist.yaml` (read-only MCP tools you admit).
 
@@ -63,7 +64,8 @@ Move them back. Without it, nothing was overwritten. Delete the new files to und
 | `settings.template.json`, `models.json`, `mcp.template.json`, `APPEND_SYSTEM.md` | `~/.pi/agent/` | Pi config |
 | `extensions/*.ts` | `~/.pi/agent/extensions/` | guards (destructive, Soul, empty-reply, MCP gate, protected writes), statusline, return/lease/stall plumbing |
 | `agents/*.md` | `~/.pi/agent/agents/` | subagent role profiles (scout, researcher, analyst, implementer, verifier, worker, wos-director) |
-| `templates/AGENTS.md.template` | `$WISDOM_OS_ROOT/AGENTS.md` | the operating contract |
+| `templates/AGENTS.md.template` | `$WISDOM_OS_ROOT/AGENTS.md` | neutral operating contract with `<<FILL>>` placeholders |
+| `examples/AGENTS.owner-example.md` | — (read only) | the owner's filled-in contract as a worked example |
 | `templates/{directors,model_choices,mcp_allowlist}.yaml` | `~/.wos-runtime/…` | registry, model table, MCP allowlist |
 | `runtime/` | `~/.wos-runtime/` | `wos_send`, model-choice checker, statusline sources, Herdr shell env / guard / tmux conf |
 | `bin/wos-fleet-restart` | `~/bin/` | one-command Director restart wrapper |
