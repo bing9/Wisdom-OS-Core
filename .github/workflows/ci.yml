@@ -18,6 +18,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      # The portability audit's company/people terms are the secret, so they are never committed: CI reads them
+      # from the WOSC_DENY_LIST repository secret (the `re:`/`term:` lines of the maintainer's deny file) and
+      # FAILS LOUDLY when it is absent; a CI that cannot check a company term must not print PASS.
+      - name: deny list from repository secret
+        env:
+          WOSC_DENY_LIST: ${{ secrets.WOSC_DENY_LIST }}
+        run: |
+          test -n "$WOSC_DENY_LIST" || { echo "::error::repository secret WOSC_DENY_LIST is not set; the portability audit cannot run"; exit 1; }
+          printf '%s\n' "$WOSC_DENY_LIST" > "$RUNNER_TEMP/wosc-deny.txt"
+          echo "WOSC_DENY_FILE=$RUNNER_TEMP/wosc-deny.txt" >> "$GITHUB_ENV"
       # One command is the gate. CI must not maintain a parallel set of steps that can drift from
       # what a maintainer runs locally.
       - run: node scripts/release-check.mjs

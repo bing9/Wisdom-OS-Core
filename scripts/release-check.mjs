@@ -19,7 +19,8 @@
  */
 import { spawn } from 'node:child_process';
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // ONE grammar, imported — never restated here. WOSC-221: the gate and `scripts/extension-audit.mjs`
@@ -695,6 +696,16 @@ const CHECKS = [
 // the brief asked for legitimate controls inside the mutation table, and a table that can only
 // express "must fail" cannot hold one.
 
+// The first literal term of the active deny file (WOSC_DENY_FILE or ~/.config/wisdom-os-core/deny.txt).
+// Read at mutation time only; with no deny file the mutation is a no-op and is reported as NO-OP.
+function firstDenyTerm() {
+  const path = [process.env.WOSC_DENY_FILE,
+    join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'wisdom-os-core', 'deny.txt')]
+    .filter(Boolean).find((candidate) => existsSync(candidate));
+  const line = path ? readFileSync(path, 'utf8').split('\n').find((entry) => entry.startsWith('term:')) : undefined;
+  return line ? line.slice(5) : '';
+}
+
 const MUTATIONS = [
   { id: 'stale-doc', catches: 'manifest-and-docs', file: 'CLAUDE.md',
     apply: (body) => body.replace('extensions/wos-butler.ts', 'extensions/wisdom-os.ts') },
@@ -721,6 +732,13 @@ const MUTATIONS = [
   // packaged file and the portability audit would — correctly — fail the gate on the gate.
   { id: 'private-path-leaks', catches: 'portability', file: 'src/domain.mjs',
     apply: (body) => `${body}\n// state root: ${['/ho', 'me/example-user/.wis', 'dom-db'].join('')}/state\n` },
+  // The audit covers every tracked file, not package.json `files`: tests/ and archive/ are published too.
+  // A request-id shape, assembled at runtime so this file stays clean.
+  { id: 'request-id-leaks-outside-package-files', catches: 'portability', file: 'tests/domain.test.mjs',
+    apply: (body) => `${body}\n// fixed in ${['req', 'demo-fix', '20991231', '01'].join('-')}\n` },
+  // A term from the ACTIVE external deny list (never committed), injected into an archived doc.
+  { id: 'deny-term-leaks-into-archive', catches: 'portability', file: 'archive/web-v0.1/README.md',
+    apply: (body) => (firstDenyTerm() ? `${body}\nSee ${firstDenyTerm()} for details.\n` : body) },
   { id: 'ci-drops-node-20', catches: 'ci-matrix', file: '.github/workflows/ci.yml',
     apply: (body) => body.replace(/node-version:.*/, 'node-version: 22') },
 

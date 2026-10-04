@@ -42,6 +42,8 @@ negative precedent that stops the next change from rediscovering a known mistake
 | D22 | Harness decisions live in this one register, updated at the point of change | active |
 | D23 | `AGENTS.md` ships as a neutral template plus the owner's version as a worked example | active |
 | D23-old | The owner's `AGENTS.md`, mechanically sanitized, is the install template | superseded by D23 |
+| D24 | The publish audit covers every tracked file, commit message and identity, with an external fail-closed deny list | active |
+| D24-old | The portability audit scans `package.json` `files` with an optional deny list | superseded by D24 |
 
 ## Entries
 
@@ -184,6 +186,25 @@ negative precedent that stops the next change from rediscovering a known mistake
 
 ### D23-old — sanitized owner contract as the template — superseded by D23
 - In use from 2026-10-03 to 2026-10-04 (commits `522ca23`–`39e59e9`).
+
+### D24 — The publish audit covers what is published, with an external deny list (2026-10-04)
+- **Why:** the audit scanned the package's `files` closure (65 of 102 tracked files), its company-term list
+  was empty unless an environment variable was set, and it never looked at commit metadata. A gate that
+  cannot go red is not a gate, and a committed deny list publishes the very terms it protects.
+- **Consequence:** `scripts/portability-audit.mjs` scans every `git ls-files` path (a copy without `.git`
+  is walked), prints skips, and fails on zero files. Company, people and project terms come only from an
+  external source (`PORTABILITY_DENY_TERMS`, `WOSC_DENY_FILE`, or `~/.config/wisdom-os-core/deny.txt`); none
+  resolving exits 2 with "deny list unavailable". Over the outgoing range every author and committer email
+  must be the public noreply identity (allow-list) and every commit message is scanned. Request-id shapes
+  are refused. `npm install` points `core.hooksPath` at `scripts/git-hooks`, whose `pre-push` runs the audit
+  on the pushed range; `--no-verify` is the only, visible bypass. CI reads the list from the
+  `WOSC_DENY_LIST` secret and fails loudly without it.
+- **Implementation:** `scripts/portability-audit.mjs`, `scripts/git-hooks/pre-push`, `scripts/install-hooks.mjs`,
+  `.github/workflows/ci.yml`. **Evidence:** gate check `portability`; mutations `private-path-leaks`,
+  `request-id-leaks-outside-package-files`, `deny-term-leaks-into-archive`.
+
+### D24-old — package-closure audit, optional deny list — superseded by D24
+- In use until 2026-10-04.
 
 ## How to update
 

@@ -11,7 +11,8 @@
     "audit:extensions": "node scripts/extension-audit.mjs",
     "release-check": "node scripts/release-check.mjs",
     "release-check:negative": "node scripts/release-check.mjs --negative",
-    "check": "node scripts/release-check.mjs"
+    "check": "node scripts/release-check.mjs",
+    "prepare": "node scripts/install-hooks.mjs"
   },
   "files": [
     "extensions",

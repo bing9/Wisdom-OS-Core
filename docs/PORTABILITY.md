@@ -37,9 +37,13 @@ pi -e . --list-models
 node --test tests/*.test.mjs
 ```
 
-The audit enumerates the package's declared `files` closure and rejects private homes, local runtime
-stores, internal hosts, personal identity tokens, and live web entrypoints. It prints searched roots;
-a clean result without coverage is not a result.
+The audit enumerates every tracked file (`git ls-files`), not only the package's `files` closure, and
+rejects private homes, request ids, live web entrypoints and every term of the external deny list
+(employer, internal tools and hosts, people, private layout). The deny list is never committed: it is read
+from `PORTABILITY_DENY_TERMS`, `WOSC_DENY_FILE` or `~/.config/wisdom-os-core/deny.txt`, and the audit exits 2
+when none resolves. Over the outgoing range (`--range`, else `origin/main..HEAD`) it also requires the
+public noreply identity on every commit and scans every commit message. It prints its file count, roots
+and skips; a clean result without coverage is not a result. `npm install` installs the `pre-push` hook.
 
 ## Future rule
 

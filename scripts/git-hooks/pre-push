@@ -1,0 +1,29 @@
+#!/bin/sh
+# pre-push — refuse a push the publish audit has not passed. Installed by `npm install` (prepare →
+# scripts/install-hooks.mjs sets core.hooksPath). Bypass only with an explicit `git push --no-verify`,
+# so the bypass is visible in shell history.
+#
+# For every pushed ref: the checkout must BE the pushed commit and be clean (the audit reads the files
+# on disk), then `portability-audit.mjs --range <remote>..<local>` checks every tracked file, every
+# commit message and every author/committer identity in the outgoing range. An optional maintainer
+# gate (`git config wosc.extraGate "<command>"`) receives the same stdin lines and must also pass.
+set -u
+z=0000000000000000000000000000000000000000
+top=$(git rev-parse --show-toplevel) || exit 1
+input=$(cat)
+[ -n "$input" ] || exit 0
+status=0
+printf '%s\n' "$input" | while read -r lref lsha rref rsha; do
+  [ "$lsha" = "$z" ] && continue                       # deleting a remote ref publishes nothing
+  if [ "$(git rev-parse HEAD)" != "$lsha" ] || [ -n "$(git status --porcelain)" ]; then
+    echo "pre-push: REFUSED — check out $lref ($lsha) cleanly before pushing it (the audit reads the checkout)" >&2
+    exit 1
+  fi
+  if [ "$rsha" = "$z" ]; then range="$lsha"; else range="$rsha..$lsha"; fi
+  node "$top/scripts/portability-audit.mjs" --range "$range" || { echo "pre-push: REFUSED by portability-audit ($range)" >&2; exit 1; }
+done || status=1
+extra=$(git config --get wosc.extraGate || true)
+if [ "$status" -eq 0 ] && [ -n "$extra" ]; then
+  printf '%s\n' "$input" | sh -c "$extra" || { echo "pre-push: REFUSED by wosc.extraGate" >&2; status=1; }
+fi
+exit $status
