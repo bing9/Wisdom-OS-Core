@@ -58,6 +58,11 @@ The adapter records raw observations automatically, and the Pi agent uses `wisdo
 material decisions, requirement changes, tasks, and corrections during the turn. BANK, DONE,
 semantic harness changes, and case-law changes remain explicit human gates.
 
+## Decisions
+
+Every durable harness decision, why it was made, whether it still holds, and where it is
+implemented is in **`docs/DECISIONS.md`**. Superseded and refuted decisions stay listed there.
+
 ## How it compounds
 
 A session journal provides continuity; it is not learning. Compounding occurs only when:
@@ -118,6 +123,7 @@ src/dream.mjs              continuous-improvement loop: bounded triggers, add/am
 extensions/wos-dream.ts    the loop's Pi adapter — runs on settle, never in the foreground
 scripts/release-check.mjs  the release gate, positive and negative
 cli.mjs                    direct state CLI
+docs/DECISIONS.md          the decisions register: one row per durable decision, superseded rows kept
 pi-config/                 sanitized, installable Pi harness config (generated weekly; see pi-config/README.md)
 archive/web-v0.1/          retained browser prototype; not shipped as the product interface
 ```

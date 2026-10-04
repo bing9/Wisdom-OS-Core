@@ -39,6 +39,8 @@ Hard gates:
 - Never describe a control as working on the strength of a synthetic hit. `src/gatelog.mjs` reports
   `synthetic-only` separately for exactly this reason.
 
+Before shipping a change to a durable behavior, add or supersede its row in `docs/DECISIONS.md` in the same commit.
+
 Before shipping: `node scripts/release-check.mjs` must pass and
 `node scripts/release-check.mjs --negative` must kill every mutation (exit 3).
 
