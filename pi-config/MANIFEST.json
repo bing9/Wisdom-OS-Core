@@ -25,7 +25,7 @@
   "extensions/wos-open-loop.ts": "sha256:520418201a7b41594fb63a591fdb31b1a989846838540f4393ea9459d7f4f06d",
   "extensions/wos-protected-writes.ts": "sha256:c926c8bed4e805e880a17c5e7efbbfca80a193d45bc1c9316d57e7eaf9be519a",
   "extensions/wos-return.ts": "sha256:da58a59f725a5c043fae705c0d3e3c87343ded74901742ee38959aee2ab76b89",
-  "extensions/wos-section-pin.ts": "sha256:b4a768e8bec18d6f8942383a9395a33dac64a350eebf9909261440ccad6bb262",
+  "extensions/wos-section-pin.ts": "sha256:49271fca9c54bb221ec9691f0a38fcebaaa4ec01ee8b8ca987fefa3f6d4369b6",
   "extensions/wos-session-lease.ts": "sha256:a82ec6d79dd8acc9e55893417a698a0a8fe34b2d65303afff3e3f318ea367220",
   "extensions/wos-skill-find.ts": "sha256:12fdcadba64c5e21d984966bd417f05d0c44d544d2616537a9a306b73163fc8b",
   "extensions/wos-soul-guard.ts": "sha256:8f69b649e48dc34fde6931ca8edf59819decc7a03ba74fab471f8293f28a64f4",

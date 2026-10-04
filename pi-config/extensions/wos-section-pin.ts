@@ -1,5 +1,5 @@
 /**
- * wos-section-pin r2 — keep run-type-dependent system-prompt sections byte-stable per session
+ * wos-section-pin r3 — keep run-type-dependent system-prompt sections byte-stable per session
  * (request 2026-09-28).
  *
  * ROOT CAUSE (r1). employer's pi-dist `extensions/internal/repo-info.ts` writes the `repo_workspace` section ONLY in
@@ -21,13 +21,20 @@
  * the session branch (system messages + compaction.systemMessage), else absent. Result: byte-identical head whether or
  * not before_agent_start ran; at most one flip per session (absent -> present the first time an input run ever sets it).
  * Old Pi runtimes without `context_with_system` never call this.
+ * r3 (request 2026-10-04). Pi's built-in MCP extension writes `mcp_servers` ONLY in
+ * before_agent_start too (pi.real: `pi.on("before_agent_start", … sections[MCP_SERVERS_SECTION] = …)`), and the base
+ * options a triggered run renders from (pi.real `_installAgentNextTurnRefresh`: `_runSystemPromptOptions ?? base`) do
+ * not carry it. Since example_mcp became `deferred` (2026-10-03 20:35Z) every input <-> triggered switch toggled
+ * `mcp_servers` <text>|null: replayed over all sessions 2026-10-03..10-04T09:32Z, 4 prefix misses whose ONLY
+ * post-mitigation head difference was mcp_servers (DIR-wos 09:21:07Z cw 250,329). Pinned like repo_workspace. A server
+ * removed from mcp.json keeps its last summary until the session's branch is replaced (stale text, no cache cost).
  * Kill switch: WOS_SECTION_PIN_OFF=1 or touch ~/.wos-runtime/butler/section-pin.off. Sections: WOS_PIN_SECTIONS (csv).
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-export const DEFAULT_PINNED = ["repo_workspace"];
+export const DEFAULT_PINNED = ["repo_workspace", "mcp_servers"];
 const OFF = path.join(os.homedir(), ".wos-runtime", "butler", "section-pin.off");
 
 function pinnedNames(): string[] {
