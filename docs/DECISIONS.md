@@ -40,6 +40,8 @@ negative precedent that stops the next change from rediscovering a known mistake
 | D21 | A figure registry keeps every version; the review gallery shows only the latest | active |
 | D21-old | The review gallery shows every version of every figure | superseded by D21 |
 | D22 | Harness decisions live in this one register, updated at the point of change | active |
+| D23 | `AGENTS.md` ships as a neutral template plus the owner's version as a worked example | active |
+| D23-old | The owner's `AGENTS.md`, mechanically sanitized, is the install template | superseded by D23 |
 
 ## Entries
 
@@ -168,6 +170,20 @@ negative precedent that stops the next change from rediscovering a known mistake
 - **Why:** a decision log compounds only when changing the harness carries an obligation to update it. Otherwise it becomes another stale archive.
 - **Consequence:** this file. Superseded and refuted rows are kept. When the weekly export changes `pi-config/` and this file has not changed since the previous `pi-config` change, the run logs a warning.
 - **Implementation:** this file; `CLAUDE.md` §Before shipping. **Evidence:** the weekly sync's warning line.
+
+### D23 — Neutral `AGENTS.md` template plus an owner example (2026-10-04)
+- **Why:** mechanical sanitizing of the owner's contract left a template that was neither neutral nor readable. It
+  kept "past-the owner", "the owner-owned", ruling dates and "he/his", and it still imposed the owner's
+  philosophy and language rule on anyone who installed it.
+- **Consequence:** every export writes two files. `templates/AGENTS.md.template` is neutral: the general
+  operating contract and hard invariants, with `<<FILL>>` placeholders for purpose, philosophy, owner
+  preferences and folder map, and no dates, pronouns or language rule. `examples/AGENTS.owner-example.md` is
+  the owner's live contract with the artifacts repaired. The exporter refuses if any listed artifact remains.
+- **Implementation:** `pi-config/templates/AGENTS.md.template`, `pi-config/examples/AGENTS.owner-example.md`.
+  **Evidence:** `tests/pi-config.test.mjs` (artifact patterns, plus a negative control that must catch planted artifacts).
+
+### D23-old — sanitized owner contract as the template — superseded by D23
+- In use from 2026-10-03 to 2026-10-04 (commits `522ca23`–`39e59e9`).
 
 ## How to update
 
