@@ -2,6 +2,8 @@
 
 **The human owns intent and irreversible judgment; AI owns coordination and execution.**
 
+This contract implements the project's three [Principles](PRINCIPLES.md): work continuity over agent identity, human intent with AI execution, and decision compounding over task throughput.
+
 ## 1. Intent is the input
 
 A useful intent names:

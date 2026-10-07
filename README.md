@@ -11,6 +11,16 @@ into governed harness-improvement work.
 Intent → Decision → Task → Evidence → Outcome → Case law → next decision
 ```
 
+## Three principles
+
+1. **Work continuity over agent identity** — shared context must let a blank agent resume within five minutes.
+2. **Human intent, AI execution** — humans own outcomes and irreversible calls; AI owns coordination, delegation, and handoffs.
+3. **Decision compounding over task throughput** — feedback, evidence, and outcomes must improve future judgment, not merely close tasks.
+
+Read the full [Principles](docs/PRINCIPLES.md) and the operational [Core Contract](docs/CORE_CONTRACT.md).
+
+The project deliberately starts with the smallest compounding layer. The TUI is an instrument panel, not the product. The product is a restartable decision record that survives Claude Code, Codex, Hermes, or the next agent runtime.
+
 ## Install
 
 ```bash
@@ -169,6 +179,8 @@ and have **not** been exercised on the maintainer's host. The old browser cockpi
 
 The most recent private→public reconciliation is recorded in `docs/HARNESS_SYNC_2026-08-22.md`,
 including what was deliberately left private.
+
+Success does not require scale. One deep user whose real decisions repeatedly improve is enough; stars, user count, and organizational growth are optional.
 
 ## License
 
