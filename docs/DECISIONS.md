@@ -44,6 +44,7 @@ negative precedent that stops the next change from rediscovering a known mistake
 | D23-old | The owner's `AGENTS.md`, mechanically sanitized, is the install template | superseded by D23 |
 | D24 | The publish audit covers every tracked file, commit message and identity, with an external fail-closed deny list | active |
 | D24-old | The portability audit scans `package.json` `files` with an optional deny list | superseded by D24 |
+| D25 | Employer internals and the owner's own principles never ship; the gate also refuses CJK text | active |
 
 ## Entries
 
@@ -205,6 +206,23 @@ negative precedent that stops the next change from rediscovering a known mistake
 
 ### D24-old — package-closure audit, optional deny list — superseded by D24
 - In use until 2026-10-04.
+
+### D25 — Employer internals and owner principles never ship; CJK is gated (2026-10-07)
+- **Why:** after D24 the export still carried the employer's internal CLI surface (its command names, its Pi
+  distribution path, an internal search tool), the owner's personal razors and design filters in the worked
+  example, a quoted owner ruling, and short session ids. Each passed because the deny sources matched names,
+  not tool shapes, id shapes or another language.
+- **Consequence:** the exporter maps the employer CLI surface to neutral words (`internal-cli`, `pi-dist`,
+  `web.browse`, ...), short session ids to `<session>`, and drops quoted owner rulings. The owner example keeps the *shape* of its purpose,
+  razors and filters with `<placeholders>`, because the owner's principles are owner content in any language.
+  The private publish gate adds three arms: employer and product names plus the CLI shapes, a shared literal
+  list of owner, project and Case terms (Director labels and public model ids are exempt as product
+  vocabulary), and CJK text. Two CJK exemptions are printed on every run: lines already in a published tree,
+  and the bilingual detector vocabulary in `pi-config/extensions/wos-open-loop.ts`. The name and deny arms
+  still apply to both. The never-pushed range was rewritten blob by blob with the same scrub; nothing
+  published was rewritten.
+- **Implementation:** the private exporter and publish gate (outside this repo); `tests/pi-config.test.mjs`.
+  **Evidence:** the gate's self-test (nine content poisons RED), and 0 hits on the published range.
 
 ## How to update
 
