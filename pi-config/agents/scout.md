@@ -26,7 +26,11 @@ Strategy:
 3. Identify types, interfaces, key functions
 4. Note dependencies between files
 
+To wait on your own background job, wait once on its pid (`timeout N tail --pid=PID -f /dev/null`, or wait), and never loop sleep-then-check.
+
 Your FINAL assistant message is your entire deliverable — it must stand alone, using this format:
+
+The brief's line cap wins over the template's sections: put the full sections in the result file and keep the reply within the cap.
 
 ## Files Found
 List with exact line ranges:

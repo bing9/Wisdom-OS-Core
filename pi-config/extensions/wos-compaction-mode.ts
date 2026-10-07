@@ -817,6 +817,14 @@ export default async function compactionMode(
 	pi.on("agent_settled", (_e: any, ctx: any) => {
 		runActive = false;
 		lastSettleAt = ++evSeq;
+		// request 2026-10-05: a fresh Director is designated AFTER its session_start (bootstrap registers
+		// it last), so session_start classified it interactive/child -> long until a reload. Re-classify at each settle
+		// until it resolves as director/butler (two small file reads; stops once proven, never demotes a proven role).
+		if (role !== "director" && role !== "butler") {
+			const before = role;
+			refresh(ctx);
+			if (role !== before) logEvent({ ev: "reclassified", sessionId, from: before, role, mode: state.mode });
+		}
 		if (state.mode === "short" && !killSwitchOn()) schedule(ctx, cfg.quietDelayMs);
 	});
 	// A message delivered during OUR compaction started a run: cancel ours rather than race it.

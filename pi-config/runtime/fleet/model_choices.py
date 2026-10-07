@@ -10,6 +10,15 @@
         → compare the yaml with the live doc (internal-cli google.docs get), the agent profiles and the OM settings; report
           drift. Exit 0 = in sync, 1 = drift, 3 = cannot measure. `--write-state` writes
           fleet/state/model_choices_check.json (read by doctor.d/model_choices.sh).
+        With --write-state (the daily 06:40 UTC cron) it first runs `watch` (below) and stores its summary under
+        "watch"; the watch never changes check's status or exit code.
+  model_choices.py watch [--dry-run] [--json]
+        → model-availability watch (request 2026-10-05): snapshot `pi --list-models` (all providers), diff vs
+          the previous snapshot, 1-token probe of the watchlist (WATCH_DEFAULT + models that appeared in the last
+          14 days and have not answered yet; pi if listed, else codex for openai/*; 60 s each, no retry loop, 120 s
+          budget). ONE wos_send relay to DIR-wos when a model appears, disappears, or a watched model's probe flips
+          to working; silent otherwise. First run = baseline (no diff). State: fleet/state/model_watch.json.
+          --dry-run writes and sends nothing. Kill: touch fleet/state/model_watch.off.
   model_choices.py replay [--days 7] [--json]
         → re-judge every dispatch record of the window with the table: how many would have been refused.
 
@@ -23,6 +32,8 @@ Policy (the owner 2026-10-03; quotes in the yaml `rulings`):
     (or leaves the request pending for its owning Director). Scope: single-user accident guard, not anti-forgery.
 Env seams (tests): MODEL_CHOICES_YAML, MODEL_CHOICES_SESSIONS, MODEL_CHOICES_AGENTS_DIRS (os.pathsep list),
 MODEL_CHOICES_SETTINGS, MODEL_CHOICES_STATE_DIR, MODEL_CHOICES_DOC_FILE (markdown) + MODEL_CHOICES_DOC_REVISION, MODEL_CHOICES_NOW.
+Watch seams: MODEL_WATCH_LIST_FILE (a `pi --list-models` text), MODEL_WATCH_PROBE_FILE (JSON {model: "ok"|"fail:<cls>"}),
+MODEL_WATCH_CATALOG, MODEL_WATCH_WOS_SEND, MODEL_WATCH_LIST (comma list replacing WATCH_DEFAULT).
 """
 import datetime as dt
 import glob
@@ -36,7 +47,9 @@ HOME = os.path.expanduser("~")
 WDB = os.path.join(HOME, ".wos-runtime")
 # Roles that run outside Pi subagents, so no agents/<role>.md profile exists (like om-*). front-door = the owner Bot,
 # the Slack front agent on Pi Durable (request 2026-10-03).
-NON_PROFILE_ROLES = frozenset({"front-door"})
+# director = Director sessions, launched by typed `pi` commands through pi/skill-roles/skill_role_launch.py (which applies
+# the row), not as Pi subagents (request 2026-10-05).
+NON_PROFILE_ROLES = frozenset({"front-door", "director"})
 YAML_PATH = os.environ.get("MODEL_CHOICES_YAML") or os.path.join(WDB, "fleet", "model_choices.yaml")
 SESSIONS = os.environ.get("MODEL_CHOICES_SESSIONS") or os.path.join(HOME, ".pi", "agent", "sessions")
 STATE_DIR = os.environ.get("MODEL_CHOICES_STATE_DIR") or os.path.join(WDB, "fleet", "state")
@@ -437,6 +450,250 @@ def check(offline=False):
     return rep
 
 
+# ── watch (model availability, request 2026-10-05) ──────────────────────────────────────────────
+WATCH_REF = "request 2026-10-05"
+# GPT 6.1 Sol: phased employer rollout (intranet.example/codex-gpt-6-1); on 2026-10-05 `codex exec -m gpt-6.1-sol` -> 421
+# "no upstream configured" and pi does not list it.
+WATCH_DEFAULT = tuple(x.strip() for x in (os.environ.get("MODEL_WATCH_LIST") or "openai/gpt-6.1-sol").split(",")
+                      if x.strip())
+CATALOG = os.environ.get("MODEL_WATCH_CATALOG") or os.path.join(HOME, ".pi", "agent", "meta-model-catalog.json")
+PROBE_TIMEOUT_S = 60
+PROBE_BUDGET_S = 120          # the cron line is `timeout 300`; the doc fetch runs after the watch
+AUTO_WATCH_DAYS = 14
+PROBE_PROMPT = "Reply with exactly: OK"
+PROBE_FAIL = re.compile(r"403|not entitled|PERMISSION_DENIED|model_not_found|unavailable.*model|model.*unavailable|"
+                        r"invalid.*model|does not have access|No API key|/login", re.I)
+
+
+def _watch_paths():
+    return (os.path.join(STATE_DIR, "model_watch.json"), os.path.join(STATE_DIR, "model_watch.off"),
+            os.path.join(STATE_DIR, "model_watch.lock"))
+
+
+def parse_list_models(text):
+    out, seen_header = {}, False
+    for ln in text.splitlines():
+        cells = ln.split()
+        if not seen_header:
+            seen_header = len(cells) >= 2 and cells[0] == "provider" and cells[1] == "model"
+            continue
+        if len(cells) >= 4 and re.match(r"^[a-z0-9_-]+$", cells[0]):
+            out["%s/%s" % (cells[0], cells[1])] = {"context": cells[2], "max_out": cells[3]}
+    return out
+
+
+def list_models():
+    f = os.environ.get("MODEL_WATCH_LIST_FILE")
+    if f:
+        return parse_list_models(open(f, encoding="utf-8").read())
+    p = subprocess.run(["pi", "--list-models"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+    if p.returncode != 0:
+        raise RuntimeError("pi --list-models rc=%s %s" % (p.returncode, (p.stderr or "")[-160:]))
+    return parse_list_models(p.stdout)
+
+
+def catalog_info(key):
+    try:
+        rows = json.load(open(CATALOG, encoding="utf-8")).get("model_catalog") or []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    prov, _, mid = key.partition("/")
+    for r in rows:
+        if isinstance(r, dict) and r.get("provider_id") == prov and r.get("model_id") == mid:
+            return r
+    return {}
+
+
+def _fmt_k(n):
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return None
+    return "%gM" % (n / 1e6) if n >= 1000000 else "%dK" % (n // 1000)
+
+
+def describe(key, listing):
+    li, ci = listing.get(key) or {}, catalog_info(key)
+    ctx = li.get("context") or _fmt_k(ci.get("context_window")) or "unknown"
+    bits = ["context %s" % ctx]
+    if li.get("max_out"):
+        bits.append("max-out %s" % li["max_out"])
+    cost = ci.get("cost") if isinstance(ci.get("cost"), dict) else {}
+    if cost.get("input") is not None and cost.get("output") is not None:
+        bits.append("price $%g/$%g per 1M in/out (meta model catalog)" % (cost["input"], cost["output"]))
+    else:
+        bits.append("price unknown")
+    return ", ".join(bits)
+
+
+def probe(key, listed):
+    """ONE short call, no retry loop. -> {ok, cls, via, detail}."""
+    fake = os.environ.get("MODEL_WATCH_PROBE_FILE")
+    if fake:
+        v = (_load_json(fake) or {}).get(key, "fail:not-faked")
+        return {"ok": v == "ok", "cls": None if v == "ok" else v.split(":", 1)[-1], "via": "fake", "detail": v}
+    prov, _, mid = key.partition("/")
+    if listed:
+        cmd, via = ["pi", "--no-session", "--model", key, "--print", PROBE_PROMPT], "pi"
+    elif prov == "openai":
+        # codex reconnects up to 5x internally on its own (~11 s total on a 421); that is its floor, not ours.
+        cmd, via = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-m", mid,
+                    PROBE_PROMPT], "codex"
+    else:
+        return {"ok": False, "cls": "not-listed", "via": None, "detail": "not in pi --list-models; no codex route"}
+    try:
+        env = dict(os.environ)
+        env.setdefault("WOS_RUN_KIND", "cron")  # headless automation child: the DQ guard honours DQ_GUARD_BYPASS only with WOS_RUN_KIND=cron (request 2026-10-05; gate: fleet/cron_env_scope_test.py)
+        p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=PROBE_TIMEOUT_S,
+                           cwd="/tmp", env=env)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "cls": "timeout", "via": via, "detail": "> %ds" % PROBE_TIMEOUT_S}
+    except OSError as e:
+        return {"ok": False, "cls": "exec-error", "via": via, "detail": type(e).__name__}
+    out = (p.stdout or "") + "\n" + (p.stderr or "")
+    if p.returncode == 0 and re.search(r"\bOK\b", p.stdout or "") and not PROBE_FAIL.search(p.stdout or ""):
+        return {"ok": True, "cls": None, "via": via, "detail": "answered"}
+    m = re.search(r"unexpected status (\d{3})[^\n]{0,120}", out)
+    cls = ("http-%s" % m.group(1)) if m else ("rc-%s" % p.returncode)
+    last = m.group(0) if m else ([l for l in out.splitlines() if l.strip()] or [""])[-1]
+    return {"ok": False, "cls": cls, "via": via, "detail": last.strip()[:200]}
+
+
+def watch_send(body):
+    exe = os.environ.get("MODEL_WATCH_WOS_SEND") or os.path.join(WDB, "wos_send")
+    env = dict(os.environ)
+    env.pop("WOS_DIRECTOR", None)
+    try:
+        p = subprocess.run([exe, "--from", "model-watch", "--to", "DIR-wos", "--kind", "relay", "--purpose", "fyi",
+                            "--ref", WATCH_REF, "--text", body], stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, timeout=45, env=env)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, type(e).__name__
+    return p.returncode == 0, ((p.stderr or p.stdout or "").strip().splitlines() or [""])[-1][:200]
+
+
+def _doc_pointer():
+    try:
+        doc_id = (load_table().get("source") or {}).get("doc_id")
+    except TableError:
+        doc_id = None
+    doc_id = doc_id or "DOC_ID"
+    return "Model Choices doc https://docs.google.com/document/d/%s (mirror %s)" % (doc_id, YAML_PATH)
+
+
+def watch(dry_run=False):
+    """-> summary dict. Writes fleet/state/model_watch.json and relays only when not dry_run."""
+    import fcntl, time
+    sp, off, lockp = _watch_paths()
+    t0 = time.monotonic()
+    rep = {"at": iso(now_utc()), "status": "ok", "appeared": [], "disappeared": [], "now_working": [],
+           "probes": {}, "skipped": [], "sent": None}
+    if os.path.exists(off):
+        rep["status"] = "off"
+        return rep
+    lockf = None
+    if not dry_run:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        lockf = open(lockp, "a")
+        try:
+            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            rep["status"] = "locked"
+            return rep
+    st = _load_json(sp) or {}
+    if not isinstance(st, dict):
+        st = {}
+    try:
+        listing = list_models()
+    except Exception as e:
+        rep.update(status="cannot-measure", error="list: %s" % e)
+        return rep
+    prev = st.get("snapshot") if isinstance(st.get("snapshot"), dict) else None
+    if not listing or (prev and len(listing) < 0.5 * len(prev)):
+        # never diff (or overwrite) against a broken listing: that would "disappear" half the fleet in one message
+        rep.update(status="cannot-measure", error="listing has %d models (previous %d)" % (
+            len(listing), len(prev or {})))
+        return rep
+    now_s = rep["at"]
+    if prev is None:
+        rep["baseline"] = True
+    else:
+        rep["appeared"] = sorted(set(listing) - set(prev))
+        rep["disappeared"] = sorted(set(prev) - set(listing))
+    wl = st.get("watch") if isinstance(st.get("watch"), dict) else {}
+    for k in WATCH_DEFAULT:
+        wl.setdefault(k, {"since": now_s, "auto": False})
+    for k in list(wl):
+        if wl[k].get("auto") and k not in WATCH_DEFAULT:
+            try:
+                age = (now_utc() - _ts(wl[k]["since"])).total_seconds()
+            except Exception:
+                age = 0
+            if age > AUTO_WATCH_DAYS * 86400 or k in rep["disappeared"]:
+                wl.pop(k)
+    for k in rep["appeared"]:
+        wl.setdefault(k, {"since": now_s, "auto": True})
+    probes = st.get("probes") if isinstance(st.get("probes"), dict) else {}
+    order = list(rep["appeared"]) + [k for k in wl if k not in rep["appeared"]]
+    for k in order:
+        if time.monotonic() - t0 > PROBE_BUDGET_S:
+            rep["skipped"].append(k)
+            continue
+        r = probe(k, k in listing)
+        before = probes.get(k)
+        probes[k] = dict(r, at=now_s)
+        rep["probes"][k] = r
+        if r["ok"] and k not in rep["appeared"] and not (isinstance(before, dict) and before.get("ok")):
+            rep["now_working"].append(k)
+        if r["ok"] and wl.get(k, {}).get("auto"):
+            wl.pop(k, None)          # an auto-watched model is reported once it answers, then dropped
+    parts = []
+    if rep["appeared"]:
+        parts.append("APPEARED in pi --list-models: " + "; ".join(
+            "%s (%s; probe %s)" % (k, describe(k, listing), "ok via %s" % rep["probes"][k]["via"]
+                                   if rep["probes"].get(k, {}).get("ok") else
+                                   "failed %s" % rep["probes"].get(k, {}).get("cls", "skipped"))
+            for k in rep["appeared"]))
+    if rep["disappeared"]:
+        parts.append("DISAPPEARED from pi --list-models: " + "; ".join(
+            "%s (was context %s)" % (k, (prev.get(k) or {}).get("context", "?")) for k in rep["disappeared"]))
+    if rep["now_working"]:
+        parts.append("NOW WORKING (watched model answered a 1-token probe): " + "; ".join(
+            "%s via %s (%s%s)" % (k, rep["probes"][k]["via"], describe(k, listing),
+                                  "" if k in listing else "; NOT yet in pi --list-models")
+            for k in rep["now_working"]))
+    pending = [m for m in (st.get("pending") or []) if isinstance(m, str)]
+    if parts:
+        pending.append("MODEL-WATCH %s: %s. Next: add to Model Choices + benchmark — %s. [%s]" % (
+            now_s[:10], " | ".join(parts), _doc_pointer(), WATCH_REF))
+    rep["message"] = pending[-1] if parts else None
+    if dry_run:
+        rep["pending"] = len(pending)
+        return rep
+    if pending:
+        body = pending[0] if len(pending) == 1 else " || ".join(pending)   # one message, even after a failed day
+        ok, err = watch_send(body)
+        rep["sent"] = ok
+        if ok:
+            pending = []
+        else:
+            rep["send_error"] = err
+    hist = os.path.join(STATE_DIR, "model_watch_history.jsonl")
+    if prev is None or rep["appeared"] or rep["disappeared"] or rep["now_working"]:
+        with open(hist, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"at": now_s, "baseline": prev is None, "appeared": rep["appeared"],
+                                 "disappeared": rep["disappeared"], "now_working": rep["now_working"],
+                                 "models": sorted(listing)}) + "\n")
+    new = {"at": now_s, "snapshot": listing, "watch": wl, "probes": probes, "pending": pending,
+           "last": {k: rep[k] for k in ("appeared", "disappeared", "now_working", "skipped", "sent")}}
+    tmp = sp + ".%d" % os.getpid()
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(new, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, sp)
+    rep["ms"] = int((time.monotonic() - t0) * 1000)
+    return rep
+
+
 # ── replay ─────────────────────────────────────────────────────────────────────────────────────────────
 def replay(days=7):
     table = load_table()
@@ -497,8 +754,30 @@ def main(argv):
             return 2
         print(json.dumps(admit(req), ensure_ascii=False))
         return 0
+    if verb == "watch":
+        rep = watch(dry_run="--dry-run" in rest)
+        if "--json" in rest:
+            print(json.dumps(rep, ensure_ascii=False, indent=1))
+        else:
+            print("model_watch: %s appeared=%d disappeared=%d now_working=%d sent=%s%s" % (
+                rep["status"], len(rep["appeared"]), len(rep["disappeared"]), len(rep["now_working"]), rep["sent"],
+                (" error=" + rep["error"]) if rep.get("error") else ""))
+            for k, r in rep["probes"].items():
+                print("  probe %s %s %s" % (k, "ok" if r["ok"] else "FAIL " + str(r["cls"]), r.get("detail", "")[:120]))
+            if rep.get("message"):
+                print("  message:", rep["message"])
+        return {"ok": 0, "off": 0, "locked": 0}.get(rep["status"], 3)
     if verb == "check":
+        wrep = None
+        if "--write-state" in rest and "--no-watch" not in rest:
+            try:
+                wrep = watch()
+            except Exception as e:      # the watch never blinds the sync check
+                wrep = {"status": "error", "error": "%s: %s" % (type(e).__name__, e)}
         rep = check(offline="--offline" in rest)
+        if wrep is not None:
+            rep["watch"] = {k: wrep.get(k) for k in ("status", "appeared", "disappeared", "now_working", "sent",
+                                                     "skipped", "error", "send_error") if wrep.get(k) is not None}
         if "--write-state" in rest:
             os.makedirs(STATE_DIR, exist_ok=True)
             tmp = os.path.join(STATE_DIR, ".model_choices_check.json.%d" % os.getpid())
@@ -515,6 +794,8 @@ def main(argv):
                 print("  note ", n)
             if rep.get("error"):
                 print("  ERROR", rep["error"])
+            if rep.get("watch"):
+                print("  watch", json.dumps(rep["watch"], ensure_ascii=False))
         return {"in-sync": 0, "drift": 1}.get(rep["status"], 3)
     if verb == "replay":
         days = 7

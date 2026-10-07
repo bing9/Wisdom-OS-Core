@@ -144,6 +144,9 @@ function segments(command: string): string[][] {
   const flushSeg = () => { flushWord(); if (words.length) out.push(words); words = []; };
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
+    // bash: inside "…" a backslash escapes " \ $ ` (request 2026-10-05: `python3 -c "os.system(\"sed -i …\")"`
+    // used to END the quote at \", so the inline code reached the interpreter check mangled and passed)
+    if (q === '"' && c === "\\" && i + 1 < command.length && /["\\$`]/.test(command[i + 1])) { cur += command[++i]; continue; }
     if (q) { if (c === q) q = null; else cur += c; continue; }
     if (c === "'" || c === '"') { q = c; has = true; continue; }
     if (c === "\\" && i + 1 < command.length) { cur += command[++i]; has = true; continue; }
@@ -559,7 +562,8 @@ const ROOTISH = new RegExp("(?:^|[\\s'\"`(,=])(?:~|" + os.homedir().replace(/[.*
 const SHELL_OUT = /\b(?:subprocess\s*\.\s*\w+|os\s*\.\s*(?:system|popen|exec\w*|spawn\w*)|Popen|execSync|spawnSync|execFileSync|exec|spawn|system)\s*\(/g;
 const SHELL_MUT = /(?:^|[\s'"`,\[(])(?:-i|--in-place|-pi|rm|mv|cp|tee|truncate|install|rsync|dd|unlink|ln|touch|chmod|shred)(?=[\s'"`,\])]|$)/;
 // Write calls, each with the argument(s) that name the TARGET.
-const TARGET_CALLS: Array<[RegExp, "first" | "dest" | "both" | "recv" | "pyopen" | "perlopen" | "recvopen"]> = [
+const TARGET_CALLS: Array<[RegExp, "first" | "dest" | "both" | "recv" | "pyopen" | "perlopen" | "recvopen" | "fileinput"]> = [
+  [/\b(?:fileinput\s*\.\s*)?(?:input|FileInput)\s*\((?=[^\n;]*\binplace\s*=\s*(?!False\b|0\b|None\b))/g, "fileinput"],   // python fileinput in-place (request 2026-10-05)
   [/(?<![.\w$])open\s*\(/g, "pyopen"],                                            // python/ruby open(path, mode)
   [/(?<![.\w$])(?:sysopen|open)\s*\(?\s*(?:my\s+)?[$\w]+\s*,/g, "perlopen"],        // perl open(F, ">x") / 3-arg
   [/\bos\s*\.\s*(?:remove|unlink|truncate|rmdir|removedirs|makedirs|mkdir|open|chmod|chown|utime|mkfifo|mknod)\s*\(/g, "first"],
@@ -677,6 +681,14 @@ export function interpWritesSoul(code: string, lang: "py" | "js" | "pl", cwds: s
           const mode = modeArgs.find((x, i) => i === 0 ? !/^\s*\w+\s*=/.test(x) || /^\s*mode\s*=/.test(x) : /^\s*mode\s*=/.test(x));
           const mv = mode ? unmask(mode).replace(/^\s*mode\s*=\s*/, "") : "";
           if (/^\s*'[^']*[wax+][^']*'\s*$/.test(mv) && soulExpr(target ?? "")) return true;
+          continue;
+        }
+        if (which === "fileinput") {
+          // targets: the first positional arg or files=…; none ⇒ sys.argv[1:] (Soul-bound iff argv names Soul)
+          const pos = args.filter((x) => x.trim() && !/^\s*\w+\s*=/.test(x));
+          const kw = args.find((x) => /^\s*files\s*=/.test(x));
+          const tgt = kw ? kw.replace(/^\s*files\s*=\s*/, "") : pos[0];
+          if (tgt === undefined ? argvSoul : (soulExpr(tgt) || topArgs(tgt.replace(/^\s*[\[(]\s*/, "")).some((x) => soulExpr(x)))) return true;
           continue;
         }
         if (which === "perlopen") {

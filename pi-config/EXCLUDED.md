@@ -10,12 +10,19 @@ project names and judgments).
 |---|---|
 | extension `wos-butler.ts` | private butler; the public Core ships its own extensions/wos-butler.ts |
 | extension `wos-cell-egress.ts` | employer notebook/data-egress integration |
+| extension `wos-dq-publish-guard.ts` | wraps a private data-quality hook on the owner's reader-facing publish tools |
 | extension `wos-data-policy-guard.ts` | employer data-classification policy (internal-only rules and tools) |
+| extension `wos-fanout-nudge.ts` | dispatch advisory written around the owner's private fleet incidents |
+| extension `wos-flag-silent-limit.ts` | wraps a private query-coverage hook from the owner's runtime tree |
 | extension `wos-front-desk.ts` | the owner's personal intake persona and queue semantics |
+| extension `wos-drive-churn-env.ts` | workaround for the owner's synced-drive mount (host-specific) |
+| extension `wos-drive-walk-guard.ts` | deadline guard for the owner's synced-drive mount (host-specific) |
 | extension `wos-guards.ts` | private guard set; the public Core ships its own extensions/wos-guards.ts |
 | extension `wos-lane.ts` | private judgment lane; the public Core ships its own extensions/wos-lane.ts |
 | extension `wos-internal-knowledge.ts` | robustness wrapper around the employer's internal knowledge MCP server |
 | extension `wos-model-catalog-gap.ts` | workaround for the employer's internal model catalog and gateway |
+| extension `wos-offvault-guard.ts` | guards the owner's private vault layout against stray writes (host-specific) |
+| extension `wos-pi-config-guard.ts` | guards the owner's live Pi config dir; written around a private incident |
 | extension `wos-prior-knowledge.ts` | retrieval over the owner's private knowledge graph and people/Soul files |
 | extension `wos-project-estate.ts` | the owner's project/estate map; encodes private project names and routing |
 | employer plugin packages in settings | internal-only skills and tools; install your own |

@@ -1,13 +1,14 @@
 # AGENTS.md
 
-> 🔴 Installer-only, ≤2.5k tokens: agents draft; DIR-wos verifies and installs
-> via `agents_md_install.py`. Full text behind each 🔴 line, equally binding:
+> 🔴 Installer-only, ≤2.5k tokens: DIR-wos installs via `agents_md_install.py`.
+> Full text behind each 🔴 line, equally binding:
 > `incident-rules.md` (agent-director), `retrieval-contract.md` (agentic-workflow).
 
 ## Purpose
 
 **<System name>:** AI carries context and execution so the owner can stay calm and make the
-few decisions only they can make. This is not a productivity system.
+few decisions only they can make. This is not a productivity system. Harness compounds their judgment:
+specificity × distillation × Director (`example-project/CONSTITUTION.md`).
 
 The failure mode is the **AI Vampire**: more output creates context switching, review work, or a
 queue silicon could have resolved. Judge an inbox by what it holds, not its count. Irreversible,
@@ -56,18 +57,19 @@ only you make>** 3. **<Razor 3: your bar for acting at all>**
   and not blocked, do it and report it done.
 - 🔴 **Containment is not incident closure.** After restoring service, find the root-cause fix at
   the real chokepoint, implement or route it, add regression evidence; else report **UNRESOLVED**.
-  At closure, an incident the owner ruled on gets a one-line Case via `cases_kernel`; a P0 gets a full
+  At closure, an incident the owner ruled on gets a one-line Case; a P0 gets a full
   Case; never Soul.
-- **Upstream bugs (Pi, Herdr, [sync-tool], [internal-clone-tool]): build a WOS workaround, file nothing upstream**;
-  remove the scaffold once upstream fixes it (`upstream_workarounds.yaml`).
-  OM is owner-owned, not upstream; DIR-wos designs it; `99_Reference` holds a sanitized copy.
-- Sweeps and long processing → a Pi-native `subagent` child.
+- **Upstream bugs (Pi, Herdr, [sync-tool], [internal-clone-tool]): WOS workaround, file nothing upstream**; drop it when
+  fixed (`upstream_workarounds.yaml`). OM: owner-owned, DIR-wos designs, copy in `99_Reference`.
+- Sweeps, long jobs and ops longer than a tool timeout → a Pi-native `subagent` child or a
+  detached run.
 - 🔴 **Subagent admission is capped and fail-closed.** Caps live only in `fleet-limits.ts`; any
   count mismatch or missing binding stops dispatch. "More parallel" never means fill slots.
 - Agents may reload or restart an **idle** Director unasked, then tell them.
 - Every session advances object-work; learning rides alongside, never replaces it.
 - **Single-user safety:** guard against our own agents' accidents, not attackers; prefer undo
   over prevention; verifiers only for numbers, reader-facing or irreversible work; new friction for the owner needs their yes.
+  A self-test crosses each real boundary once, never mocks only.
 
 ## Retrieve before answering or measuring
 
@@ -87,9 +89,8 @@ before encoding it; measuring rows does not define it.
 | History | `query_wisdom.py search` + QMD |
 | GChat/Gmail/[Internal-Social]/GDocs | wos-runtime chat tables, `internal-cli [internal-social].feed`, `knowledge_open` |
 
-Skills route from Pi `settings.json` + SKILL.md descriptions (`05_Personal_WOS/skill/` = packaging/viz
-graph). Numbers/charts → `/agentic-workflow`; fleet → `/agent-director`; [Company]-internal → `internal-cli`
-(Pi MCP: allowlisted read-only `example_mcp` tools only; other MCP tools = `internal-cli` CLI; `mcp.json` is installer-only).
+Skills route from Pi `settings.json` + SKILL.md descriptions. Numbers/charts → `/agentic-workflow`; fleet → `/agent-director`; [Company]-internal → `internal-cli`
+(Pi MCP: read-only `example_mcp` allowlist; other MCP tools via `internal-cli` CLI; `mcp.json` installer-only).
 Working state → [Company-AI] Memory; browseable knowledge → WOS.
 
 ## Hard invariants
@@ -119,8 +120,8 @@ Working state → [Company-AI] Memory; browseable knowledge → WOS.
 **SENSE → THINK → JUDGE → SURFACE → ACT → LEARN.** It turns when a precedent changed or confirmed a
 decision, a hidden variable was captured, or a pattern was strengthened, amended, or demoted;
 artifact counts are not evidence.
-Minimum decision capture is one sentence; only P0 needs a full Case. The [dev-environment] is the only
-writer. Location map: `retrieval-contract.md` §Location map.
+Minimum decision capture is one sentence. The [dev-environment] is the only writer. Location map:
+`retrieval-contract.md`.
 
 <!-- om-curator v1
 knowledge_home: Obsidian Vault/Context/04_Knowledge

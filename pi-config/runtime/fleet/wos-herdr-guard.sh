@@ -46,6 +46,36 @@ if [ ! -x "$REAL_BIN" ]; then
   exit 127
 fi
 
+# 🔴 CRON-ONLY ENV SCRUB (request 2026-10-05). cronie exports every crontab-level
+#    `VAR=value` line to every job, and herdr panes inherit the SERVER's environment (measured
+#    2026-09-26). The live server started from cron on 2026-10-03 therefore handed DQ_GUARD_BYPASS=1
+#    (and CRON_MODEL_JUDGMENT, CRON_TZ) to every interactive Pi pane. Every herdr start -- the cron
+#    boot restore, fleet_resume_directors, wos_fleet_restart, a client auto-start, the owner's terminal --
+#    goes through this name, so the cron-only variables are dropped HERE, for every subcommand, before
+#    the real binary sees any bytes. Intended-global crontab vars (PATH, THRIFT_TLS_CL_*) are kept.
+#    The list is checked against the crontab mirror by fleet/cron_env_scope_test.py: a NEW crontab-level
+#    var must be classified there (scrub here, or intended-global) or that test fails.
+#    Scrub-only kill switch: WOS_HERDR_ENV_SCRUB=0 (one call, loud; also skips the SHELL fix below).
+WOS_CRON_ONLY_ENV="DQ_GUARD_BYPASS WOS_RUN_KIND CRON_MODEL_JUDGMENT CLAUDE_JUDGMENT_EVAL MODEL_QUARANTINE_ENFORCE CRON_TZ"
+if [ "${WOS_HERDR_ENV_SCRUB:-1}" = "0" ]; then
+  printf 'wos-herdr-guard: cron-only env scrub DISABLED by WOS_HERDR_ENV_SCRUB=0\n' >&2
+else
+  for _v in $WOS_CRON_ONLY_ENV; do unset "$_v"; done
+  unset _v
+  # SHELL (DIR-wos 2026-10-05 decision 1b): cronie hands jobs SHELL=/bin/sh and herdr uses SHELL for pane
+  # shells, so a cron-started server gave every pane /bin/sh. Use the user's LOGIN shell (passwd field 7);
+  # if it cannot be resolved to an executable, leave SHELL unchanged and warn on stderr.
+  _login_shell=$(getent passwd "${USER:-$(id -un 2>/dev/null)}" 2>/dev/null | cut -d: -f7)
+  if [ -n "$_login_shell" ] && [ -x "$_login_shell" ]; then
+    export SHELL="$_login_shell"
+  else
+    printf 'wos-herdr-guard: login shell unresolved (getent passwd %s); SHELL left as %s\n' \
+      "${USER:-?}" "${SHELL:-<unset>}" >&2
+  fi
+  unset _login_shell
+fi
+unset WOS_CRON_ONLY_ENV
+
 # Kill switch first, so a broken guard can never wedge the fleet.
 if [ "${WOS_HERDR_GUARD:-1}" = "0" ]; then
   exec "$REAL_BIN" "$@"

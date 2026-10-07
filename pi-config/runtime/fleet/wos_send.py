@@ -95,6 +95,10 @@ def record(*args, **kw):
 # the full retrieval cost."
 PURPOSES = ("new-task", "scope-correction", "status", "receipt", "fyi")
 RETRIEVES = ("new-task", "scope-correction")
+# purposes an estate OWNER may send about its own project to another session (no object-work moves)
+OWNER_REPORT_PURPOSES = ("status", "receipt", "fyi")
+# ...and only on report channels: a steer/brief relabelled --purpose fyi is still a work order
+OWNER_REPORT_KINDS = ("handover", "relay")
 # request 2026-10-01 (hx-wos-send-refusal): `need-decision` is the fleet's REPLY-POLICY /
 # report-STATUS word (request envelopes, return-channel.md), not a purpose -- yet five sends from
 # four sessions (DIR-example x2, DIR-example, DIR-wos; 09-24..09-30) passed it to --purpose,
@@ -772,6 +776,34 @@ def fence_block(name: str):
                      rec.get("ts", "?"), rec.get("transition_id", "?")))
 
 
+# ── FAN-OUT footer (request 2026-10-05) ─────────────────────────────────
+# the owner 2026-10-05: "always try to parallel, we are very busy". INCIDENT: example-project sent DIR-example a
+# multi-part ask; DIR-example folded every part into ONE serial child and the Thinker sat blocked. The
+# rule text did not fire, so the delivered message itself now names the fan-out. Deterministic
+# (fanout_parse.py, no LLM), advisory only: a parser failure never blocks or alters a send. Parsed on the
+# sender's body BEFORE the intent block is prepended; a handover that is a REPORT to its awaiting owner
+# (report_basis) gets none -- "answer per item" is for new work, not for the answer itself.
+FANOUT_KINDS = ("ask", "handover", "brief")
+FANOUT_OFF = os.path.join(WDB, "fleet", "state", "fanout_footer.off")
+
+
+def fanout_footer(a, body: str, is_report=None) -> str:
+    if a.kind not in FANOUT_KINDS or os.path.exists(FANOUT_OFF):
+        return body
+    try:
+        import fanout_parse
+        line = fanout_parse.footer(body)
+        if line and is_report is not None and is_report():
+            return body                          # a REPORT to its awaiting owner: no footer
+    except Exception as e:  # noqa: BLE001 -- advisory; the send proceeds unchanged
+        loud("fan-out footer: skipped (%s: %s)" % (type(e).__name__, e))
+        return body
+    if not line or line in body:
+        return body
+    loud(line)
+    return body.rstrip() + "\n\n" + line + "\n"
+
+
 def deliver(name: str, text: str) -> tuple[str, dict]:
     """Return (mechanism, exact Herdr route). Raises on a real delivery failure.
 
@@ -824,6 +856,59 @@ def _actor_identity():
 # with no Pi session), loudly, with the fix. `unbound:` confers nothing: it is treated exactly
 # like the old anonymous label wherever an identity is REQUIRED (asks, named-project sends).
 UNBOUND_PREFIX = "unbound:"
+
+
+def sender_mismatch_text(director_id, sender) -> str:
+    """DESIGNATION_SENDER_MISMATCH refusal that names the way out (request 2026-10-06: DIR-example
+    dry-ran a cron wrapper's `--from cron` from inside its own designated session on 2026-10-05 22:25Z and had to
+    work out by itself that the designation comes from the session env, not from --from)."""
+    return ("REFUSED: DESIGNATION_SENDER_MISMATCH — this session is designated as %s, not %r. "
+            "Nothing sent. Sending as yourself: omit --from (the designation names you) or pass --from %s. "
+            "Testing a cron/script sender: run it outside this session's env, as cron does "
+            "(env -i HOME=$HOME PATH=/usr/bin:/bin /usr/bin/python3 wos_send.py ...)."
+            % (director_id, sender, director_id))
+
+
+def subagent_name_hint(name, session_id=None, sessions_root=None) -> str:
+    """'' or a hint naming subagent_message, for a `--to` that is a Pi SUBAGENT name (request 2026-10-06
+    r2: 14 days held 5 'no Herdr-bound agent named X' refusals where X was a child -- DIR-example x3 hc-br-inc-*, DIR-example
+    deck-consolidate -- each recovered by hand). Subagents are reached by their parent's `subagent_message`, never
+    wos_send. Reads only the dispatch records pi-interactive-subagents writes:
+    <sessions>/<project>/artifacts/<parent session>/dispatch/<safeKey(name)>.json. Never raises."""
+    import glob
+    import hashlib
+    import json
+    try:
+        n = str(name or "")
+        if not n:
+            return ""
+        slug = re.sub(r"[^A-Za-z0-9._-]", "_", n)[:64]
+        key = slug if slug == n else "%s~%s" % (slug, hashlib.sha256(n.encode("utf-8")).hexdigest()[:12])
+        root = sessions_root or os.environ.get("WOS_SEND_PI_SESSIONS") or os.path.expanduser("~/.pi/agent/sessions")
+        sid = session_id if session_id is not None else os.environ.get("PI_SESSION_ID", "")
+        own, other = False, ""
+        for path in glob.glob(os.path.join(glob.escape(root), "*", "artifacts", "*", "dispatch", key + ".json")):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    rec = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(rec, dict) or rec.get("name") != n:
+                continue
+            parent = str(rec.get("parentSessionId") or os.path.basename(os.path.dirname(os.path.dirname(path))))
+            if sid and parent == sid:
+                own = True
+                break
+            other = other or parent
+        if own:
+            return (" %r is a subagent THIS session spawned: use subagent_message(name=%r) -- it steers a running "
+                    "child or resumes a finished one (wos_send has no Herdr binding for it)." % (n, n))
+        if other:
+            return (" %r is a subagent name (parent session %s): only its parent reaches it, with "
+                    "subagent_message(name=%r); from here, send to that parent's Director instead." % (n, other[:8], n))
+    except Exception:  # noqa: BLE001 -- a hint must never change the refusal
+        return ""
+    return ""
 
 
 def is_anonymous(sender) -> bool:
@@ -2001,8 +2086,7 @@ def _main(argv, ctx) -> int:
     if a.project and designation:
         if not is_anonymous(a.sender) and a.sender not in (designation["director_id"],
                                                            designation["session_id"]):
-            loud("REFUSED: DESIGNATION_SENDER_MISMATCH — this session is designated as %s, not %r"
-                 % (designation["director_id"], a.sender))
+            loud(sender_mismatch_text(designation["director_id"], a.sender))
             return 8
         estate_actor = designation["session_id"]
         if is_anonymous(a.sender):
@@ -2054,15 +2138,30 @@ def _main(argv, ctx) -> int:
             return 8
         estate_slug = str(estate.get("project_slug") or "")
         if estate["decision"] == "LOCAL":
-            if explicit_project:
+            # request 2026-10-06: an OWNER REPORT is not a handover of object-work.
+            # 2026-10-04T20Z..10-06T20:05Z, 7 sends refused here; 6 were a receipt/status/fyi from
+            # the project's owner (or its child) to another session, tagged with the sender's OWN
+            # project, e.g. DIR-wos -> DIR-example --kind handover --purpose receipt --project
+            # example-project (20:03:42Z). The only way through was to tag the RECIPIENT's
+            # project, i.e. a wrong estate on the wire. Routine purposes now pass with an explicit
+            # --to; new-task / scope-correction (giving own-estate work to another session, the
+            # case this refusal exists for: DIR-example -> DIR-example new-task, 10-05T16:08Z) still refuse.
+            owner_report = (a.kind in OWNER_REPORT_KINDS and
+                            (a.purpose or PURPOSE_OF_KIND.get(a.kind, "fyi")) in OWNER_REPORT_PURPOSES)
+            if explicit_project and not (owner_report and a.to):
                 loud("REFUSED: %s — local Phase-2 is allowed; this is not a cross-estate handover"
                      % estate["code"])
                 return 8
-            if not a.to:
-                loud("REFUSED: inferred local project still requires --to")
-                return 2
-            loud("estate=LOCAL project=%s; ordinary same-estate steer allowed"
-                 % estate["project_slug"])
+            if explicit_project:
+                loud("estate=LOCAL project=%s; owner report (purpose=%s) to %s; carries no "
+                     "object-work" % (estate["project_slug"],
+                                      a.purpose or PURPOSE_OF_KIND.get(a.kind, "fyi"), a.to))
+            else:
+                if not a.to:
+                    loud("REFUSED: inferred local project still requires --to")
+                    return 2
+                loud("estate=LOCAL project=%s; ordinary same-estate steer allowed"
+                     % estate["project_slug"])
         else:
             target = estate["target_director"]
             if a.to and a.to != target:
@@ -2199,6 +2298,9 @@ def _main(argv, ctx) -> int:
     if thinker_admit_basis():                              # wos-return admits exactly what this fence admitted
         body = body.rstrip() + "\n" + (THINKER_ADMIT_MARK % thinker_admit_basis()) + "\n"
 
+    if a.kind == "ask":                         # before the blocking-question instructions, which stay last
+        body = fanout_footer(a, body)
+
     purpose = a.purpose or PURPOSE_OF_KIND.get(a.kind, "fyi")
     if a.kind == "ask":
         question = peer_asks.excerpt(body)
@@ -2216,6 +2318,9 @@ def _main(argv, ctx) -> int:
     hint, hint_basis = ("", "") if (a.project or rbasis or a.no_intent
                                     or purpose not in RETRIEVES) else \
         message_project_hint(explicit_ref, body)
+    if a.kind != "ask" and not rbasis:          # a REPORT back to its awaiting owner is not new work: no footer
+        body = fanout_footer(a, body, is_report=lambda: bool(report_basis(
+            a.kind, a.purpose, a.to, explicit_ref, body)))
     if rbasis:
         block, verdict = "", "skipped:report(%s)" % rbasis
         loud("--intent: skipped -- this %s is a REPORT to its awaiting owner (%s); intent is for "
@@ -2268,8 +2373,8 @@ def _main(argv, ctx) -> int:
         return rc
     try:
         if not pane_exists(a.to):
-            loud("%s [resolution]: no Herdr-bound agent named %r.%s `python3 %s/transport.py "
-                 "--list` to see the fleet." % (tag, a.to, nothing, HERE))
+            loud("%s [resolution]: no Herdr-bound agent named %r.%s%s `python3 %s/transport.py "
+                 "--list` to see the fleet." % (tag, a.to, nothing, subagent_name_hint(a.to), HERE))
             return 3
     except transport.WosSubUnauthorised as e:
         loud("%s [authorisation]: %s%s" % (tag, e, nothing))
@@ -2514,6 +2619,9 @@ def control_route(a):
     if not a.to.strip():
         loud("REFUSED: --control needs --to <Director|Butler>.")
         return 64
+    if a.control == "rotate":            # request 2026-10-05: expected duration, BEFORE anything runs
+        loud("NOTE: %s" % getattr(director_control, "ROTATE_EXPECT",
+                                  "rotate can take minutes — do not wrap it in a short timeout"))
     if a.dry_run:
         loud("PREFLIGHT (dry-run): would run director_control %s %s as %s." % (a.control, a.to, a.sender))
         if a.control == "restart":       # request 2026-09-27: show the read-only plan
@@ -2533,6 +2641,12 @@ def control_route(a):
                 loud("PREFLIGHT (dry-run): %s" % _json.dumps(row, ensure_ascii=False, default=str))
             except Exception as e:       # noqa: BLE001 — a dry-run never fails the caller
                 loud("PREFLIGHT (dry-run): rotation plan failed: %s" % e)
+        return 0
+    if director_control.quiet_skip(a.control, a.to.strip()):
+        # request 2026-10-05: DIR-wos's post-install reloads hit example-project 10x (rc 5, 10-02..10-05). A
+        # quiet session is never typed into, so the attempt is not made at all: no ledger row, rc 0, said once here.
+        loud("SKIPPED: %s is a quiet session — %s is never typed into it (the owner 2026-10-02). Nothing attempted, nothing "
+             "logged; it picks up installed code at its next restart/rotate." % (a.to.strip(), a.control))
         return 0
     rc, row = director_control.act(a.control, a.to.strip(), str(a.sender or ""), a.text or "",
                                    butler=bool(getattr(a, "butler", False)))

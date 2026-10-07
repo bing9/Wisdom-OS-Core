@@ -72,7 +72,11 @@ After dispatching subagents you can just say what you're waiting for and stop th
 
 Subagents can't edit files for you. You still do the `edit`/`write` calls yourself, with the focused context the scouts gave you. Treat them as a context-protecting prefetch, not a substitute for thinking.
 
+To wait on your own background job, wait once on its pid (`timeout N tail --pid=PID -f /dev/null`, or wait), and never loop sleep-then-check.
+
 ## Output format when done
+
+The brief's line cap wins over the template's sections: put the full sections in the result file and keep the reply within the cap.
 
 ## Changes Made
 - `path/to/file.ts` — what changed and why

@@ -45,7 +45,11 @@ Evaluation — what to keep vs drop:
 
 If the first round of searches doesn't fully answer the question, search again with refined queries targeting the gaps.
 
+To wait on your own background job, wait once on its pid (`timeout N tail --pid=PID -f /dev/null`, or wait), and never loop sleep-then-check.
+
 Your FINAL assistant message is your entire deliverable — it must stand alone, using this format:
+
+The brief's line cap wins over the template's sections: put the full sections in the result file and keep the reply within the cap.
 
 ## Summary
 2-3 sentence direct answer.

@@ -5,6 +5,7 @@ route-role: implementer
 task-class: bounded-investigation
 capabilities: long-output, thinking-required
 tools: read, write, edit, bash, web_search, web_fetch
+skills: pre-deploy-check
 subagent_agents: scout, researcher
 model: __AGENT_MODEL__
 thinking: medium
@@ -85,7 +86,11 @@ Subagents can't edit files for you. You still do the `edit`/`write` calls yourse
 
 Each verifier round costs the fleet 5–25 minutes; most refutations were findable by the maker. Before your final message, list the top 5 ways a hostile verifier would refute this work, covering at least: **bypass** (a path around your guard or fix), **wrong population/denominator** (the wrong set of files, rows or callers), **edge input** (empty, malformed, concurrent, symlinked, huge), **installer/revert** (plan writes nothing; `--apply` refuses on drift; `--revert` restores the preimage bytes), and **claim wording broader than the evidence**. Test each one with a command you actually ran, then fix it or narrow the claim to what the test shows. If a vector was not tested, mark it `untested`; never mark an applicable vector `n/a`. This step does not replace the independent verifier.
 
+To wait on your own background job, wait once on its pid (`timeout N tail --pid=PID -f /dev/null`, or wait), and never loop sleep-then-check.
+
 ## Output format when done
+
+The brief's line cap wins over the template's sections: put the full sections in the result file and keep the reply within the cap.
 
 ## Changes Made
 - `path/to/file.ts` — what changed and why

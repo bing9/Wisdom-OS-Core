@@ -49,7 +49,11 @@ You may return exactly three.
 - Do not build an overlay by symlinking live files you will then write: COPY them, and refuse any write whose `realpath` is outside your temp root (live files overwritten this way on 2026-09-23 at 12:29Z and 19:04Z).
 - Do not widen scope into redesign. Your output is a verdict plus the narrowest correct claim, not a better implementation.
 
+To wait on your own background job, wait once on its pid (`timeout N tail --pid=PID -f /dev/null`, or wait), and never loop sleep-then-check.
+
 ## Output format
+
+The brief's line cap wins over the template's sections: put the full sections in the result file and keep the reply within the cap.
 
 ## Verdict
 CONFIRMED · REFUTED · UNRESOLVED — one sentence.

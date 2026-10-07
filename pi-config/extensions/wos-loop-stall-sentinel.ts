@@ -64,6 +64,21 @@
 //     /dev/shm/wos-pi-hb/<pid>.hb (tmpfs, Bun.mmap MAP_SHARED) and the timer stores Date.now() into it: one memory
 //     store per tick, no syscall. The file is unlinked at exit. Kill switch: WOS_STALL_HB=0; WOS_STALL_HB=all also
 //     covers subagent children.
+//
+// request 2026-10-07 (fix 3). 2026-10-07 DIR-wos sat 44.5 min in ONE on-CPU main-thread stall; the only
+// alert came 26 min in, from the health audit, and it said "idle poller". A frozen main thread cannot report itself and
+// its tool timeouts cannot fire, so the WORKER now escalates: when one stall has lasted >= ALERT_AFTER_MS (5 min) and
+// the main thread spent >= ALERT_CPU_FRAC (80 %) of it on-CPU (utime+stime ticks since the stall's first sample), the
+// worker sends ONE 'wos_send --from stall-sentinel --kind relay --purpose fyi' to DIR-example and ONE to DIR-wos (one if
+// they are the same). The relay names the Director, pid, stall start, last tool call (name, id, first 120 chars of its
+// command, read from the transcript tail), last Pi event, and capture paths. When the loop resumes, the worker queues
+// ONE message to the stalled Director itself ("you were frozen <start> → <end>, <duration>"; wos_send delivers it after
+// the current turn). Dedupe per stall: in memory per episode, and O_EXCL marker files <pid>.alert.<episode>.json /
+// .end.json (the audit trail: what was sent, rc of each send). Only registered Directors/Butler (om_current.json) are
+// alerted; subagent children never (their parent's overdue check covers them). Sends run as child processes of the
+// worker with a cron-like env (no PI_SESSION_*, so wos_send labels the sender `stall-sentinel`), 60 s timeout each.
+// Kill switch: WOS_STALL_ALERT=0. Seams: WOS_STALL_SEND, WOS_STALL_ALERT_MS, WOS_STALL_ALERT_CPU, WOS_STALL_REGISTRY,
+// WOS_STALL_FREEZE_DIR.
 import fs, { promises as fsp, constants as C } from "node:fs";
 import { Worker } from "node:worker_threads";
 import os from "node:os";
@@ -144,8 +159,12 @@ export const SYSCALL_NAME: Record<number, string> = {
 };
 // The worker body. It is self-contained (runs in a fresh isolate); the tables are injected as JSON.
 const SAMPLER_SRC = `
-const { workerData } = require("node:worker_threads"); const fs = require("node:fs");
-const { sab, tid, pid, dir, sampleAfter, selfWriteAfter, PATH_ARG, FD_ARG, NAMES, oncpu } = workerData;
+const { workerData, parentPort } = require("node:worker_threads"); const fs = require("node:fs");
+const { sab, tid, pid, dir, sampleAfter, selfWriteAfter, PATH_ARG, FD_ARG, NAMES, oncpu, alert } = workerData;
+// fix 3: the main thread posts {ctx:{sessionId, sessionFile}} at session_start and {ev:"HH:MM:SS.mmm name"} per Pi event.
+const ctx = { sessionId: "", sessionFile: "", lastEvent: "" };
+if (parentPort) parentPort.on("message", (m) => { try { if (m && m.ctx) Object.assign(ctx, m.ctx); if (m && m.ev) ctx.lastEvent = String(m.ev).slice(0, 80); } catch {} });
+if (parentPort && parentPort.unref) parentPort.unref();
 const beat = new Float64Array(sab, 0, 1); const meta = new Int32Array(sab, 8, 2); const out = new Uint8Array(sab, 16);
 const rd = (p) => { try { return fs.readFileSync(p, "utf8").trim(); } catch (e) { return "ERR:" + (e && e.code); } };
 const fdPath = (fd) => { try { return fs.readlinkSync("/proc/self/fd/" + fd); } catch (e) { return "ERR:" + (e && e.code); } };
@@ -257,11 +276,111 @@ async function selfWrite(row) {
     try { if ((await fh.stat()).isFile()) await fh.write(JSON.stringify(row) + "\\n"); } finally { await fh.close(); }
   } catch {}
 }
+// --- fix 3 (request 2026-10-07): real-time escalation of a long CPU-bound stall ---
+let alertedFor = 0, endSentFor = 0, cpuEp = 0, cpu0 = 0, cpuT0 = 0;
+const isoOf = (ms) => new Date(ms).toISOString();
+const durOf = (ms) => ms >= 3600000 ? (ms / 3600000).toFixed(1) + " h" : (ms / 60000).toFixed(1) + " min";
+async function readTail(file, n) {
+  let fh; try { fh = await fs.promises.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); } catch { return ""; }
+  try { const st = await fh.stat(); if (!st.isFile()) return ""; const off = Math.max(0, st.size - n); const b = Buffer.alloc(st.size - off);
+    const { bytesRead } = await fh.read(b, 0, b.length, off); let s = b.subarray(0, bytesRead).toString("utf8");
+    if (off > 0) s = s.slice(s.indexOf("\\n") + 1); return s; } catch { return ""; } finally { try { await fh.close(); } catch {} }
+}
+async function sessionOf() {
+  let sid = ctx.sessionId;
+  if (!sid) { try { const a = fs.readFileSync("/proc/self/cmdline", "utf8").split("\\0"); const i = a.indexOf("--session");
+    const m = i >= 0 ? /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.exec(a[i + 1] || "") : null; if (m) sid = m[0]; } catch {} }
+  let label = "", file = ctx.sessionFile;
+  try { const reg = JSON.parse((await readTail(alert.registry, 4 << 20)) || "{}");
+    for (const [k, v] of Object.entries(reg)) if (sid && v && typeof v === "object" && v.session_uuid === sid && (v.state == null || v.state === "active")) { label = k; file = file || v.session_path || ""; }
+  } catch {}
+  return { sid, label, file };
+}
+async function lastToolCall(file, beforeMs) {
+  if (!file) return null;
+  const lines = (await readTail(file, 1 << 20)).split("\\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i]; if (!l.includes('"toolCall"')) continue;
+    let e; try { e = JSON.parse(l); } catch { continue; }
+    const at = Date.parse(e && e.timestamp); if (!Number.isFinite(at) || at > beforeMs + 5000) continue;
+    const bl = ((e.message && e.message.content) || []).filter((b) => b && b.type === "toolCall"); if (!bl.length) continue;
+    const b = bl[bl.length - 1]; const a = b.arguments || {};
+    const head = String(a.command || a.path || a.task || a.message || "").replace(/\\s+/g, " ").slice(0, 120);
+    return { name: String(b.name || "?"), id: String(b.id || "").slice(0, 40), at: isoOf(at), head };
+  }
+  return null;
+}
+function sendOne(to, text) {
+  return new Promise((res) => {
+    let p; const cp = require("node:child_process");
+    const env = { HOME: oncpu.home, PATH: "/usr/bin:/bin", LANG: "C.UTF-8", USER: process.env.USER || "" };
+    try { p = cp.spawn(alert.send, ["--from", "stall-sentinel", "--to", to, "--kind", "relay", "--purpose", "fyi", "--text", text],
+      { cwd: oncpu.home, env, stdio: ["ignore", "ignore", "pipe"] }); } catch (e) { return res({ to, rc: null, err: "spawn " + (e && e.code) }); }
+    let err = ""; const k = setTimeout(() => { try { p.kill("SIGKILL"); } catch {} }, 60000);
+    p.stderr.on("data", (d) => { if (err.length < 4000) err += d; });
+    p.on("error", (e) => { clearTimeout(k); res({ to, rc: null, err: "error " + (e && e.code) }); });
+    p.on("exit", (rc) => { clearTimeout(k); res(rc === 0 ? { to, rc } : { to, rc, err: err.trim().split("\\n").slice(-1)[0].slice(0, 200) }); });
+  });
+}
+async function claim(file) {   // O_EXCL: exactly one writer per stall, across worker restarts
+  try { await fs.promises.mkdir(dir, { recursive: true }); const C = fs.constants;
+    return await fs.promises.open(file, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW | C.O_NONBLOCK, 0o600); } catch { return null; }
+}
+async function captureList() {
+  const out = [];
+  for (const f of [dir + "/" + pid + ".oncpu.jsonl", dir + "/" + pid + ".blocked.jsonl"]) { try { if ((await fs.promises.lstat(f)).isFile()) out.push(f); } catch {} }
+  out.push(alert.freezeDir + "/<stamp>-" + pid + ".json (external watcher)");
+  return out;
+}
+async function fireStall(ep, late, frac) {
+  const fh = await claim(dir + "/" + pid + ".alert." + ep + ".json"); if (!fh) return;
+  const row = { at: isoOf(Date.now()), kind: "stall-alert", pid, episode: ep, start: isoOf(ep), lateMs: Math.round(late), cpuFrac: +frac.toFixed(3), lastEvent: ctx.lastEvent || null };
+  try {
+    const s = await sessionOf(); row.label = s.label || null; row.sessionId = s.sid || null;
+    row.tool = await lastToolCall(s.file, ep); row.captures = await captureList();
+    if (!s.label) { row.skipped = "session is not a registered Director/Butler (om_current.json)"; return; }
+    const tool = row.tool ? row.tool.name + " " + row.tool.id + " at " + row.tool.at + ': "' + row.tool.head + '"' : "unknown (no toolCall in the transcript tail)";
+    const text = "[pi-main-thread-stall] " + s.label + " (pid " + pid + ", session " + s.sid + "): the Pi main thread has been FROZEN since " +
+      row.start + " (" + durOf(late) + " so far, " + Math.round(frac * 100) + "% of it on-CPU). Last tool call: " + tool + ". Last Pi event: " +
+      (row.lastEvent || "?") + ". Capture: " + row.captures.join(", ") + ". While frozen its tool timeouts cannot fire and finished subagents wait " +
+      "in the spool. Real-time relay from the stall sentinel's worker thread; nothing was touched; whether to kill or restart is the owner's call. " +
+      "One message per stall; " + s.label + " gets one more when it unfreezes. (request 2026-10-07)";
+    row.sends = [];
+    for (const to of [...new Set(alert.to)]) row.sends.push(await sendOne(to, text));
+  } finally { try { await fh.write(JSON.stringify(row) + "\\n"); } catch {} try { await fh.close(); } catch {} }
+}
+async function fireEnd(ep, endMs) {
+  const fh = await claim(dir + "/" + pid + ".alert." + ep + ".end.json"); if (!fh) return;
+  const row = { at: isoOf(Date.now()), kind: "stall-end", pid, episode: ep, start: isoOf(ep), end: isoOf(endMs), stallMs: endMs - ep };
+  try {
+    const s = await sessionOf(); row.label = s.label || null;
+    if (!s.label) { row.skipped = "session is not a registered Director/Butler"; return; }
+    const tool = await lastToolCall(s.file, ep);
+    const text = "[stall-sentinel] " + s.label + ": you were frozen " + row.start + " → " + row.end + ", " + durOf(row.stallMs) +
+      " (pid " + pid + ", main thread on-CPU; DIR-example and DIR-wos were told at the 5-min mark). Subagent children that finished meanwhile were " +
+      "recovered from the spool, so a late-looking result is the freeze, not the child. Your last tool call before the freeze: " +
+      (tool ? tool.name + " " + tool.id + ' "' + tool.head + '"' : "unknown") + ". Capture: " + dir + "/" + pid + ".oncpu.jsonl. " +
+      "One message per stall. (request 2026-10-07)";
+    row.sends = [await sendOne(s.label, text)];
+  } finally { try { await fh.write(JSON.stringify(row) + "\\n"); } catch {} try { await fh.close(); } catch {} }
+}
+function alertTick(late) {
+  if (!alert || !alert.enabled || alertedFor === episode) return;
+  const c = cpuOf(); const ticks = c.utime + c.stime;
+  if (cpuEp !== episode) { cpuEp = episode; cpu0 = ticks; cpuT0 = Date.now(); return; }
+  const span = Date.now() - cpuT0;
+  if (late < alert.afterMs || span < alert.minWindow) return;
+  const frac = (ticks - cpu0) / alert.hz / (span / 1000);
+  if (frac >= alert.cpuFrac) { alertedFor = episode; fireStall(episode, late, frac); }
+}
 setInterval(() => {
   const late = Date.now() - beat[0];
-  if (late < sampleAfter) { episode = beat[0]; if (late < 1000) { rSince = 0; return; } onCpuTick(late); return; }
+  if (late < sampleAfter) {
+    if (alertedFor && alertedFor === episode && endSentFor !== episode) { endSentFor = episode; fireEnd(episode, beat[0]); }
+    episode = beat[0]; if (late < 1000) { rSince = 0; return; } onCpuTick(late); return; }
   if (sampledFor !== episode) { sampledFor = episode; const r = sample(late); r.episode = episode; publish(r); }
   onCpuTick(late);
+  alertTick(late);
   if (late >= selfWriteAfter && wroteFor !== episode) { wroteFor = episode; const r = sample(late); r.episode = episode; publish(r); selfWrite(r); }
 }, 250);`;
 
@@ -277,7 +396,10 @@ function findPerf(): string | null {
   return null;
 }
 /** Start the in-process sampler. The main thread only ever writes the heartbeat (no I/O). */
-export function startSampler(dir: string, opts: { sampleAfter?: number; selfWriteAfter?: number; oncpu?: OnCpuOpts } = {}): Sampler | null {
+export const ALERT_AFTER_MS = 5 * 60_000;
+export const ALERT_CPU_FRAC = 0.8;
+export type AlertOpts = { enabled?: boolean; afterMs?: number; cpuFrac?: number; send?: string; registry?: string; freezeDir?: string; to?: string[] };
+export function startSampler(dir: string, opts: { sampleAfter?: number; selfWriteAfter?: number; oncpu?: OnCpuOpts; alert?: AlertOpts } = {}): Sampler | null {
   try {
     const sab = new SharedArrayBuffer(16 + 8192);
     const beat = new Float64Array(sab, 0, 1); beat[0] = Date.now();
@@ -285,9 +407,17 @@ export function startSampler(dir: string, opts: { sampleAfter?: number; selfWrit
     const oncpu = { enabled: o.enabled ?? process.env.WOS_STALL_ONCPU !== "0", after: o.after ?? ONCPU_AFTER_MS, seconds: o.seconds ?? ONCPU_SECONDS,
       minGap: o.minGap ?? ONCPU_MIN_GAP_MS, maxPerProc: o.maxPerProc ?? ONCPU_MAX_PER_PROC,
       perf: o.perf === undefined ? findPerf() : o.perf, home: o.home ?? os.homedir(), rotateBytes: o.rotateBytes ?? ONCPU_ROTATE_BYTES };
+    const a = opts.alert ?? {}; const home = os.homedir();
+    const afterMs = a.afterMs ?? (Number(process.env.WOS_STALL_ALERT_MS) || ALERT_AFTER_MS);
+    const alert = { enabled: a.enabled ?? (process.env.WOS_STALL_ALERT !== "0" && !process.env.PI_SUBAGENT_NAME), afterMs,
+      minWindow: Math.min(30_000, afterMs / 2), hz: 100, cpuFrac: a.cpuFrac ?? (Number(process.env.WOS_STALL_ALERT_CPU) || ALERT_CPU_FRAC),
+      send: a.send ?? (process.env.WOS_STALL_SEND || path.join(home, ".wos-runtime", "wos_send")),
+      registry: a.registry ?? (process.env.WOS_STALL_REGISTRY || path.join(home, ".wos-runtime", "director", "om_current.json")),
+      freezeDir: a.freezeDir ?? (process.env.WOS_STALL_FREEZE_DIR || path.join(home, ".wos-runtime", "state", "pi-freeze-captures")),
+      to: a.to ?? ["DIR-example", "DIR-wos"] };
     const worker = new Worker(SAMPLER_SRC, { eval: true, workerData: {
       sab, tid: process.pid, pid: process.pid, dir, sampleAfter: opts.sampleAfter ?? SAMPLE_AFTER_MS,
-      selfWriteAfter: opts.selfWriteAfter ?? SELF_WRITE_AFTER_MS, PATH_ARG, FD_ARG, NAMES: SYSCALL_NAME, oncpu } });
+      selfWriteAfter: opts.selfWriteAfter ?? SELF_WRITE_AFTER_MS, PATH_ARG, FD_ARG, NAMES: SYSCALL_NAME, oncpu, alert } });
     worker.unref?.();
     worker.on?.("error", () => { /* the sampler is diagnostics only */ });
     return { beat, meta: new Int32Array(sab, 8, 2), out: new Uint8Array(sab, 16), worker };
@@ -386,13 +516,18 @@ export default function (pi: any) {
   const recent: string[] = [];
   let sessionId = "";
   const child = process.env.PI_SUBAGENT_NAME || undefined;
-  const note = (ev: string) => { if (!live()) return; recent.push(`${new Date().toISOString().slice(11, 23)} ${ev}`); if (recent.length > 12) recent.shift(); };
+  let post: (m: any) => void = () => undefined;                          // fix 3: context for the worker's relay (no I/O)
+  const note = (ev: string) => { if (!live()) return; const e = `${new Date().toISOString().slice(11, 23)} ${ev}`; recent.push(e); if (recent.length > 12) recent.shift(); post({ ev: e }); };
   for (const ev of ["input", "before_agent_start", "agent_start", "turn_start", "turn_end", "tool_call", "tool_result", "agent_end", "agent_settled", "session_compact"])
     pi.on(ev, () => { note(ev); return undefined; });
-  pi.on("session_start", (_e: any, ctx: any) => { try { sessionId = String(ctx.sessionManager.getSessionId() ?? ""); } catch { /* */ } note("session_start"); });
+  let sessionFile = "";
+  pi.on("session_start", (_e: any, ctx: any) => { try { sessionId = String(ctx.sessionManager.getSessionId() ?? ""); } catch { /* */ }
+    try { sessionFile = String(ctx.sessionManager.getSessionFile?.() ?? ""); } catch { /* */ }
+    post({ ctx: { sessionId, sessionFile } }); note("session_start"); });
   if (g.__wosStallSampler) { try { g.__wosStallSampler.worker.terminate(); } catch { /* */ } g.__wosStallSampler = null; }
   const sampler: Sampler | null = process.env.WOS_STALL_SAMPLER === "0" ? null : startSampler(dir);
   g.__wosStallSampler = sampler;
+  if (sampler?.worker?.postMessage) post = (m: any) => { try { sampler.worker.postMessage(m); } catch { /* diagnostics only */ } };
   // opt-in JS sampler
   let js: { drain: () => any } | null = null;
   let jsOn = process.env.WOS_STALL_JSPROF === "1";

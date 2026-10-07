@@ -73,3 +73,7 @@ _wos_herdr_launch() {
 
 happy()   { _wos_herdr_launch happy   "$@"; }
 happier() { _wos_herdr_launch happier "$@"; }
+
+# WOS upstream workarounds pi-launcher-sl-snapshot-wisdom-os + python-pycache-on-wisdom-os (request 2026-10-07):
+# Pi launch env for herdr panes (sl shim first on PATH, PYTHONPYCACHEPREFIX). Inert outside a herdr pane.
+[ -r "$HOME/.wos-runtime/harness/pi_launch_env.sh" ] && . "$HOME/.wos-runtime/harness/pi_launch_env.sh"

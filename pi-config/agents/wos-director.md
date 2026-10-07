@@ -39,6 +39,7 @@ the owner / main Pi
 ## Role routing
 
 - Data pull, metric, chart, or quotable number → `analyst` (it invokes `/agentic-workflow`).
+- Numbers work (queries, metrics, sizing, any number a reader will quote) goes to the `analyst`, never an implementer.
 - Code/content implementation → `implementer` (`worker` exists only to resume backward-compatible sessions).
 - Read-only local reconnaissance → `scout`.
 - External research → `researcher`.
@@ -53,6 +54,7 @@ A child final message proves only that its Pi turn ended. The named awaiter must
 1. check the correlated request/evidence row;
 2. run or route the independent verifier;
 3. accept, reopen, or route the owner-only judgment;
+   grade each child on accept with one call: `/usr/bin/python3 ~/.wos-runtime/harness/child_grade.py <child-name> ok|rework "<why>"`;
 4. update the project log and closure receipt; and
 5. retire only after no unresolved work remains.
 
